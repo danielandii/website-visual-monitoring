@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { asc, eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, getPool, isTransientDatabaseError, resetPool, withDbRetry } from "./client.server";
 import { monitoredUrls, type FailureCategory, type LatestStatus, type MonitoredUrl } from "./schema";
 import { normalizeUrl } from "~/lib/url";
@@ -8,6 +8,38 @@ import { hashNormalizedUrl } from "~/lib/url.server";
 
 export async function listMonitoredUrls() {
   return withDbRetry(() => getDb().select().from(monitoredUrls).orderBy(asc(monitoredUrls.name)), { label: "list monitored urls" });
+}
+
+export async function countMonitoredUrls() {
+  const [row] = await withDbRetry(() => getDb().select({ count: sql<number>`count(*)` }).from(monitoredUrls), { label: "count monitored urls" });
+  return Number(row?.count ?? 0);
+}
+
+export async function resetLatestResults() {
+  await withDbRetry(
+    () =>
+      getDb().update(monitoredUrls).set({
+        latestStatus: "UNKNOWN",
+        latestFailureCategory: null,
+        latestSummary: null,
+        latestSignals: null,
+        latestHttpStatus: null,
+        latestFinalUrl: null,
+        latestDurationMs: null,
+        latestCheckedAt: null,
+        latestAiClassification: null,
+        latestAiConfidence: null,
+        failureStartedAt: null,
+        alertSentAt: null,
+        recoveredAt: null,
+        nextCheckAt: new Date(),
+      }),
+    { label: "reset latest results" },
+  );
+}
+
+export async function deleteAllMonitoredUrls() {
+  await withDbRetry(() => getDb().delete(monitoredUrls), { label: "delete all monitored urls" });
 }
 
 export async function createMonitoredUrl(input: { name: string; url: string; enabled?: boolean; nextCheckAt?: Date }) {

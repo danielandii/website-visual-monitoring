@@ -34,7 +34,7 @@ services:
     build: .
     command: ["sh", "-c", "npm run db:migrate && npm run start"]
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "${PORT:-3000}:3000"
 
   worker:
     <<: *app

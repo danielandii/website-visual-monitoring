@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { Browser, BrowserContext, Page, Response } from "playwright";
+import type { Browser, BrowserContext, ConsoleMessage, Page, Response } from "playwright";
 import type { AppConfig } from "~/lib/config.server";
 import type { CheckOutcome } from "./types";
 import type { OpenRouterVisualClassifier } from "./ai";
@@ -15,6 +15,16 @@ const BLOCKED_HOST_PATTERNS = [
   "intercomcdn.com",
   "crisp.chat",
 ];
+
+const MONITOR_INTERFERENCE_SCRIPT_PATTERNS = [
+  /inspect-element-console-blocker/i,
+  /\/devtools-detect(?:\.min)?\.js(?:\?|$)/i,
+  /\/disable-devtool(?:\.min)?\.js(?:\?|$)/i,
+  /\/block-(?:console|keys|right-click)(?:\.min)?\.js(?:\?|$)/i,
+];
+
+const MAX_CONSOLE_MESSAGES = 100;
+const MAX_CAPTURED_BROWSER_ERRORS = 5;
 
 const ERROR_TEXT_RE = /\b(404 not found|500 internal server error|502 bad gateway|503 service unavailable|service unavailable|maintenance mode|temporarily unavailable|application error|server error)\b/i;
 const BLOCKED_TEXT_RE = /\b(access denied|forbidden|captcha|checking your browser|verify you are human|cloudflare|security check|blocked)\b/i;
@@ -38,6 +48,9 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
   const failedFirstPartyAssets: string[] = [];
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
+  let blockedMonitorInterference = false;
+  let consoleMessageCount = 0;
+  let consoleFlooded = false;
   let response: Response | null = null;
 
   try {
@@ -57,10 +70,20 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
     });
 
     page = await context.newPage();
-    page.on("console", (message) => {
-      if (message.type() === "error") consoleErrors.push(message.text().slice(0, 180));
+    const onConsole = (message: ConsoleMessage) => {
+      consoleMessageCount += 1;
+      if (message.type() === "error" && consoleErrors.length < MAX_CAPTURED_BROWSER_ERRORS) {
+        consoleErrors.push(message.text().slice(0, 180));
+      }
+      if (consoleMessageCount >= MAX_CONSOLE_MESSAGES) {
+        consoleFlooded = true;
+        page?.off("console", onConsole);
+      }
+    };
+    page.on("console", onConsole);
+    page.on("pageerror", (error) => {
+      if (pageErrors.length < MAX_CAPTURED_BROWSER_ERRORS) pageErrors.push(error.message.slice(0, 180));
     });
-    page.on("pageerror", (error) => pageErrors.push(error.message.slice(0, 180)));
     page.on("response", (res) => {
       const req = res.request();
       const type = req.resourceType();
@@ -72,6 +95,11 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
     await page.route("**/*", async (route) => {
       const request = route.request();
       const type = request.resourceType();
+      if (isMonitorInterferenceScript(request.url(), type)) {
+        blockedMonitorInterference = true;
+        await route.abort();
+        return;
+      }
       if (["media"].includes(type) || shouldBlockThirdParty(request.url(), inputHost)) {
         await route.abort();
         return;
@@ -122,7 +150,16 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
     });
 
     const screenshot = await page.screenshot({ type: "jpeg", quality: 55, fullPage: false });
-    const signals = buildSignals({ httpStatus, visible, screenshotBytes: screenshot.length, failedFirstPartyAssets, consoleErrors, pageErrors });
+    const signals = buildSignals({
+      httpStatus,
+      visible,
+      screenshotBytes: screenshot.length,
+      failedFirstPartyAssets,
+      consoleErrors,
+      pageErrors,
+      blockedMonitorInterference,
+      consoleFlooded,
+    });
     const deterministic = classifyDeterministic({ httpStatus, visibleText: visible.sample, textLength: visible.textLength, visibleElementCount: visible.visibleElementCount, screenshotBytes: screenshot.length, signals });
 
     if (deterministic.status === "FAILING") {
@@ -183,6 +220,8 @@ function buildSignals(input: {
   failedFirstPartyAssets: string[];
   consoleErrors: string[];
   pageErrors: string[];
+  blockedMonitorInterference: boolean;
+  consoleFlooded: boolean;
 }) {
   const signals: string[] = [];
   if (input.httpStatus && input.httpStatus >= 400) signals.push(`http_${input.httpStatus}`);
@@ -191,6 +230,8 @@ function buildSignals(input: {
   if (input.screenshotBytes < 8_000) signals.push("low_visual_complexity");
   if (input.failedFirstPartyAssets.length) signals.push("failed_first_party_css_js");
   if (input.consoleErrors.length || input.pageErrors.length) signals.push("browser_errors");
+  if (input.blockedMonitorInterference) signals.push("blocked_monitor_interference");
+  if (input.consoleFlooded) signals.push("console_flood");
   if (ERROR_TEXT_RE.test(input.visible.sample)) signals.push("visible_error_text");
   if (BLOCKED_TEXT_RE.test(input.visible.sample)) signals.push("blocked_text");
   return [...new Set(signals)];
@@ -242,6 +283,11 @@ function isFirstParty(resourceUrl: string, inputHost: string) {
   } catch {
     return false;
   }
+}
+
+function isMonitorInterferenceScript(resourceUrl: string, resourceType: string) {
+  if (resourceType !== "script") return false;
+  return MONITOR_INTERFERENCE_SCRIPT_PATTERNS.some((pattern) => pattern.test(resourceUrl));
 }
 
 function shouldBlockThirdParty(resourceUrl: string, inputHost: string) {

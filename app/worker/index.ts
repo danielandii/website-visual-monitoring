@@ -3,7 +3,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Browser } from "playwright";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
-import { getConfig, type AppConfig } from "~/lib/config.server";
+import { type AppConfig } from "~/lib/config.server";
+import { getEffectiveConfig } from "~/lib/settings.server";
 import { claimNextDueUrl, nextFutureSlot, updateCheckOutcome } from "~/db/monitored-urls.server";
 import type { MonitoredUrl } from "~/db/schema";
 import { OpenRouterVisualClassifier } from "./ai";
@@ -15,8 +16,8 @@ chromium.use(stealth());
 const workerId = `${os.hostname()}-${process.pid}-${Date.now()}`;
 
 async function main() {
-  const config = getConfig();
-  const ai = new OpenRouterVisualClassifier(config);
+  let config = await getEffectiveConfig();
+  let ai = new OpenRouterVisualClassifier(config);
   await ai.initialize();
   const discord = new DiscordAlertDispatcher(config);
   const browser = await chromium.launch({ headless: true });
@@ -28,7 +29,28 @@ async function main() {
 
   console.log(`Worker ${workerId} started with max concurrency ${config.MAX_CONCURRENT_CHECKS}`);
 
+  const reloadSettings = async () => {
+    try {
+      const next = await getEffectiveConfig();
+      if (next.OPENROUTER_API_KEY !== config.OPENROUTER_API_KEY || next.OPENROUTER_MODEL !== config.OPENROUTER_MODEL) {
+        const nextAi = new OpenRouterVisualClassifier(next);
+        await nextAi.initialize();
+        ai = nextAi;
+      }
+      discord.setConfig(next);
+      config = next;
+    } catch (error) {
+      console.warn("Could not reload settings; keeping the previous configuration.", error);
+    }
+  };
+  let lastSettingsReload = Date.now();
+
   while (!stopping) {
+    if (Date.now() - lastSettingsReload >= 30_000) {
+      lastSettingsReload = Date.now();
+      await reloadSettings();
+    }
+
     if (active >= config.MAX_CONCURRENT_CHECKS) {
       await delay(500);
       continue;

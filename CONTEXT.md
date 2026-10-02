@@ -36,6 +36,10 @@ _Avoid_: Check history, screenshot record, log entry
 Evidence that a **Monitored URL** may have a **Failure**, but is not enough by itself to trigger an **Alert**.
 _Avoid_: Failure, alert reason
 
+**Monitor Interference**:
+Behavior on a **Monitored URL** that disrupts the monitor's ability to verify the page while not necessarily being a user-facing **Failure**.
+_Avoid_: Failure, anti-bot block, broken site
+
 **Confirmation Retry**:
 A second check of the same **Monitored URL** used to confirm a suspected **Failure** before alerting.
 _Avoid_: Double check, rerun

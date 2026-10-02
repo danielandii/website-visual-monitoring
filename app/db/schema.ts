@@ -61,3 +61,29 @@ export const monitoredUrls = mysqlTable(
 
 export type MonitoredUrl = typeof monitoredUrls.$inferSelect;
 export type NewMonitoredUrl = typeof monitoredUrls.$inferInsert;
+
+export const userRoleValues = ["ADMIN", "VIEWER"] as const;
+export type UserRole = (typeof userRoleValues)[number];
+
+export const users = mysqlTable(
+  "users",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    username: varchar("username", { length: 191 }).notNull(),
+    name: varchar("name", { length: 191 }).notNull(),
+    email: varchar("email", { length: 191 }),
+    passwordHash: varchar("password_hash", { length: 255 }).notNull(),
+    role: mysqlEnum("role", userRoleValues).notNull().default("VIEWER"),
+    lastSignInAt: timestamp("last_sign_in_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("users_username_unique").on(table.username)],
+);
+
+export type User = typeof users.$inferSelect;
+
+export const appSettings = mysqlTable("app_settings", {
+  key: varchar("key", { length: 100 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
+});

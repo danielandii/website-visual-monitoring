@@ -36,6 +36,8 @@ Generate a password hash:
 node -e "console.log(require('crypto').createHash('sha256').update(process.argv[1]).digest('hex'))" 'your-password'
 ```
 
+`ADMIN_USERNAME` / `ADMIN_PASSWORD_HASH` only seed the first admin account on first sign-in. After that, users, roles (Admin / Viewer) and passwords are managed in the dashboard under Admin → Users. Values saved under Admin → Settings are stored in the database and override the matching environment variables; the worker reloads them about every 30 seconds.
+
 Run migrations:
 
 ```bash

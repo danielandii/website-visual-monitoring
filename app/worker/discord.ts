@@ -7,7 +7,11 @@ export class DiscordAlertDispatcher {
   private windowStartedAt = Date.now();
   private suppressed = 0;
 
-  constructor(private readonly config: AppConfig) {}
+  constructor(private config: AppConfig) {}
+
+  setConfig(config: AppConfig) {
+    this.config = config;
+  }
 
   async sendFailureAlert(monitoredUrl: MonitoredUrl, outcome: CheckOutcome) {
     if (!this.config.DISCORD_WEBHOOK_URL) {

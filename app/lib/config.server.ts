@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { z } from "zod";
 
-const ConfigSchema = z.object({
+export const ConfigSchema = z.object({
   DATABASE_URL: z.string().min(1),
   SESSION_SECRET: z.string().min(32).default("dev-session-secret-change-me-please-32"),
   ADMIN_USERNAME: z.string().default("admin"),
