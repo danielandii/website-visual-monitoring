@@ -1,8 +1,15 @@
-import type { FailureCategory, LatestStatus } from "~/db/schema";
+import type { BlockType, FailureCategory, LatestStatus } from "~/db/schema";
+
+export type WebsiteBlock = {
+  type: BlockType;
+  provider: string | null;
+  evidence: string[];
+};
 
 export type CheckOutcome = {
   status: LatestStatus;
   failureCategory: FailureCategory | null;
+  block?: WebsiteBlock | null;
   summary: string;
   signals: string[];
   httpStatus: number | null;

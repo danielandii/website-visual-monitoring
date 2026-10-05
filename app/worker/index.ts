@@ -112,6 +112,7 @@ async function processUrl(
     previous: monitoredUrl,
     status: final.status,
     failureCategory: final.failureCategory,
+    block: final.block ?? null,
     summary: final.summary,
     signals: final.signals,
     httpStatus: final.httpStatus,
@@ -124,7 +125,8 @@ async function processUrl(
     alertSentAt,
   });
 
-  console.log(`${monitoredUrl.url} -> ${final.status}${final.failureCategory ? `/${final.failureCategory}` : ""}`);
+  const detail = final.failureCategory ?? final.block?.type;
+  console.log(`${monitoredUrl.url} -> ${final.status}${detail ? `/${detail}` : ""}`);
 }
 
 function combineConfirmationAttempts(first: Awaited<ReturnType<typeof checkUrl>>, retry: Awaited<ReturnType<typeof checkUrl>>) {
@@ -135,7 +137,8 @@ function combineConfirmationAttempts(first: Awaited<ReturnType<typeof checkUrl>>
     return { ...retry, summary, signals };
   }
 
-  if (first.status === "FAILING" && retry.status === "FAILING") {
+  // Both attempts must agree; a Failure mixed with a Website Block proves neither.
+  if ((first.status === "FAILING" || first.status === "BLOCKED") && retry.status === first.status) {
     return { ...retry, summary, signals };
   }
 
@@ -143,13 +146,15 @@ function combineConfirmationAttempts(first: Awaited<ReturnType<typeof checkUrl>>
     ...retry,
     status: "UNKNOWN" as const,
     failureCategory: null,
+    block: null,
     summary: `Inconclusive after retry. ${summary}`,
     signals,
   };
 }
 
 function formatAttempt(outcome: Awaited<ReturnType<typeof checkUrl>>) {
-  return `${outcome.status}${outcome.failureCategory ? `/${outcome.failureCategory}` : ""} - ${outcome.summary}`;
+  const detail = outcome.failureCategory ?? outcome.block?.type;
+  return `${outcome.status}${detail ? `/${detail}` : ""} - ${outcome.summary}`;
 }
 
 main().catch((error) => {

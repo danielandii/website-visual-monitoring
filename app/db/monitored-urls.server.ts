@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, getPool, isTransientDatabaseError, resetPool, withDbRetry } from "./client.server";
-import { monitoredUrls, type FailureCategory, type LatestStatus, type MonitoredUrl } from "./schema";
+import { monitoredUrls, type BlockType, type FailureCategory, type LatestStatus, type MonitoredUrl } from "./schema";
 import { normalizeUrl } from "~/lib/url";
 import { hashNormalizedUrl } from "~/lib/url.server";
 
@@ -29,9 +29,14 @@ export async function resetLatestResults() {
         latestCheckedAt: null,
         latestAiClassification: null,
         latestAiConfidence: null,
+        latestBlockType: null,
+        latestBlockProvider: null,
+        latestBlockEvidence: null,
         failureStartedAt: null,
+        failureEpisodeCategory: null,
         alertSentAt: null,
         recoveredAt: null,
+        blockStartedAt: null,
         nextCheckAt: new Date(),
       }),
     { label: "reset latest results" },
@@ -195,6 +200,7 @@ export async function updateCheckOutcome(input: {
   previous: MonitoredUrl;
   status: LatestStatus;
   failureCategory: FailureCategory | null;
+  block: { type: BlockType; provider: string | null; evidence: string[] } | null;
   summary: string;
   signals: string[];
   httpStatus: number | null;
@@ -208,6 +214,10 @@ export async function updateCheckOutcome(input: {
 }) {
   const isOk = input.status === "OK";
   const isFailing = input.status === "FAILING";
+  const isBlocked = input.status === "BLOCKED";
+  const prev = input.previous;
+  // Only OK or a confirmed Failure ends a Block Episode; only OK ends a Failure Episode.
+  // BLOCKED and UNKNOWN leave the Failure Episode untouched, so they never count as a Recovery.
 
   await withDbRetry(
     async () => {
@@ -224,9 +234,14 @@ export async function updateCheckOutcome(input: {
           latestCheckedAt: input.checkedAt,
           latestAiClassification: input.aiClassification ?? null,
           latestAiConfidence: input.aiConfidence ?? null,
-          failureStartedAt: isOk ? null : isFailing ? input.previous.failureStartedAt ?? input.checkedAt : input.previous.failureStartedAt,
-          alertSentAt: isOk ? null : isFailing ? input.alertSentAt ?? input.previous.alertSentAt : input.previous.alertSentAt,
-          recoveredAt: isOk && input.previous.failureStartedAt ? input.checkedAt : input.previous.recoveredAt,
+          latestBlockType: input.block?.type ?? null,
+          latestBlockProvider: input.block?.provider ?? null,
+          latestBlockEvidence: input.block?.evidence ?? null,
+          failureStartedAt: isOk ? null : isFailing ? prev.failureStartedAt ?? input.checkedAt : prev.failureStartedAt,
+          failureEpisodeCategory: isOk ? null : isFailing ? input.failureCategory : prev.failureEpisodeCategory,
+          alertSentAt: isOk ? null : isFailing ? input.alertSentAt ?? prev.alertSentAt : prev.alertSentAt,
+          recoveredAt: isOk && prev.failureStartedAt ? input.checkedAt : prev.recoveredAt,
+          blockStartedAt: isOk || isFailing ? null : isBlocked ? prev.blockStartedAt ?? input.checkedAt : prev.blockStartedAt,
           nextCheckAt: input.nextCheckAt,
           checkClaimedAt: null,
           checkClaimedBy: null,
