@@ -13,6 +13,7 @@ import {
   updateMonitoredUrl,
 } from "~/db/monitored-urls.server";
 import { hostnameForDisplay } from "~/lib/url";
+import { formatWebsiteBlock } from "~/lib/website-block";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Website Visual Monitoring" }];
@@ -82,7 +83,7 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-type Filter = "All" | "OK" | "FAILING" | "UNKNOWN" | "Disabled";
+type Filter = "All" | "OK" | "FAILING" | "BLOCKED" | "UNKNOWN" | "Disabled";
 type View = "overview" | "urls" | "detail";
 
 const PAGE_SIZE = 20;
@@ -91,6 +92,7 @@ const FILTERS: Array<{ key: Filter; label: string }> = [
   { key: "All", label: "All" },
   { key: "OK", label: "OK" },
   { key: "FAILING", label: "Failing" },
+  { key: "BLOCKED", label: "Blocked" },
   { key: "UNKNOWN", label: "Unknown" },
   { key: "Disabled", label: "Disabled" },
 ];
@@ -120,6 +122,7 @@ export default function Dashboard() {
   const count = (status: string) => urls.filter((u) => u.latestStatus === status).length;
   const ok = count("OK");
   const failing = count("FAILING");
+  const blocked = count("BLOCKED");
   const unknown = count("UNKNOWN");
   const total = urls.length;
   const selected = urls.find((u) => u.id === selectedId) ?? null;
@@ -155,7 +158,7 @@ export default function Dashboard() {
           <Overview
             urls={urls}
             canEdit={canEdit}
-            counts={{ total, ok, failing, unknown }}
+            counts={{ total, ok, failing, blocked, unknown }}
             cadenceMinutes={cadenceMinutes}
             maxConcurrent={maxConcurrent}
             navigationTimeoutMs={navigationTimeoutMs}
@@ -174,7 +177,7 @@ export default function Dashboard() {
             filter={filter}
             query={query}
             page={page}
-            counts={{ total, ok, failing, unknown }}
+            counts={{ total, ok, failing, blocked, unknown }}
             onFilter={setFilter}
             onQuery={changeQuery}
             onPage={setPage}
@@ -238,7 +241,7 @@ export default function Dashboard() {
 }
 
 type UrlRow = ReturnType<typeof useLoaderData<typeof loader>>["urls"][number];
-type Counts = { total: number; ok: number; failing: number; unknown: number };
+type Counts = { total: number; ok: number; failing: number; blocked: number; unknown: number };
 
 function PageHead({ title, subtitle, canEdit, onAdd, onImport }: { title: string; subtitle: string; canEdit: boolean; onAdd: () => void; onImport: () => void }) {
   return (
@@ -275,6 +278,7 @@ function Overview(props: {
   const dist = [
     { label: "OK", count: counts.ok, color: "var(--ok)" },
     { label: "Failing", count: counts.failing, color: "var(--bad)" },
+    { label: "Blocked", count: counts.blocked, color: "var(--warn)" },
     { label: "Unknown", count: counts.unknown, color: "var(--line-strong)" },
   ];
 
@@ -285,6 +289,11 @@ function Overview(props: {
     categories.set(key, (categories.get(key) ?? 0) + 1);
   }
   const catRows = [...categories.entries()].sort((a, b) => b[1] - a[1]);
+  // A Failure Episode stays open while the site is blocked, so list by episode, not latest status.
+  const openFailures = urls.filter((u) => u.failureStartedAt);
+  const blockedUrls = urls
+    .filter((u) => u.latestStatus === "BLOCKED")
+    .sort((a, b) => new Date(a.blockStartedAt ?? 0).getTime() - new Date(b.blockStartedAt ?? 0).getTime());
 
   const timed = urls.filter((u) => u.latestDurationMs != null).slice(0, 14);
   const queue = urls
@@ -307,6 +316,7 @@ function Overview(props: {
         <Metric label="Monitored URLs" value={counts.total} sub={`${disabled} disabled`} onClick={() => props.onFilter("All")} />
         <Metric label="OK" value={counts.ok} tone="ok" sub={`${pct(counts.ok)}% of total`} onClick={() => props.onFilter("OK")} />
         <Metric label="Failing" value={counts.failing} tone="bad" sub={`${pct(counts.failing)}% of total`} onClick={() => props.onFilter("FAILING")} />
+        <Metric label="Blocked" value={counts.blocked} tone="warn" sub="Blocked by website · not alerted" onClick={() => props.onFilter("BLOCKED")} />
         <Metric label="Unknown" value={counts.unknown} sub="Not checked yet" onClick={() => props.onFilter("UNKNOWN")} />
         <Metric label="Cadence" value={`${cadenceMinutes}m`} sub="Per URL" />
       </section>
@@ -374,7 +384,7 @@ function Overview(props: {
                   <div
                     style={{
                       height: `${Math.min(100, ((u.latestDurationMs ?? 0) / totalTimeoutMs) * 100)}%`,
-                      background: u.latestStatus === "FAILING" ? "var(--bad)" : "var(--ok)",
+                      background: u.latestStatus === "FAILING" ? "var(--bad)" : u.latestStatus === "BLOCKED" ? "var(--warn)" : "var(--ok)",
                     }}
                   />
                 </button>
@@ -393,11 +403,14 @@ function Overview(props: {
             <strong>Open failure episodes</strong>
             <span className="muted small">One alert per episode</span>
           </div>
-          {failingUrls.length === 0 ? <div className="empty">No open failures.</div> : null}
-          {failingUrls.map((u) => (
+          {openFailures.length === 0 ? <div className="empty">No open failures.</div> : null}
+          {openFailures.map((u) => (
             <button key={u.id} className="list-row" onClick={() => props.onOpen(u.id)}>
-              <span style={{ fontWeight: 500 }}>{u.name}</span>
-              <span className="tag">{u.latestFailureCategory ?? "FAILING"}</span>
+              <span style={{ fontWeight: 500 }}>
+                {u.name}
+                {u.latestStatus !== "FAILING" ? <span className="muted small"> · now {statusLabel(u.latestStatus).toLowerCase()}</span> : null}
+              </span>
+              <span className="tag">{u.failureEpisodeCategory ?? u.latestFailureCategory ?? "FAILING"}</span>
               <span className="muted small">Since {formatDate(u.failureStartedAt)}</span>
               <span className="muted small">{u.alertSentAt ? `Alerted ${formatDate(u.alertSentAt)}` : "No alert sent"}</span>
             </button>
@@ -416,11 +429,27 @@ function Overview(props: {
                 <span className="mono muted small" style={{ marginRight: 12 }}>{formatTime(u.nextCheckAt)}</span>
                 {u.name}
               </span>
-              <span className={`pill ${u.latestStatus.toLowerCase()}`}>{u.latestStatus}</span>
+              <StatusPill status={u.latestStatus} />
             </div>
           ))}
         </section>
       </div>
+
+      <section className="panel flush">
+        <div className="panel-head">
+          <strong>Website blocks</strong>
+          <span className="muted small">Not alerted · these URLs are effectively unmonitored</span>
+        </div>
+        {blockedUrls.length === 0 ? <div className="empty">No URLs are blocked by their website.</div> : null}
+        {blockedUrls.map((u) => (
+          <button key={u.id} className="list-row" onClick={() => props.onOpen(u.id)}>
+            <span style={{ fontWeight: 500 }}>{u.name}</span>
+            <span className="tag warn">{formatWebsiteBlock(u.latestBlockType, u.latestBlockProvider)}</span>
+            <span className="muted small" suppressHydrationWarning>Since {formatDate(u.blockStartedAt)} · {formatAge(u.blockStartedAt)}</span>
+            <span className="muted small">{u.failureStartedAt ? "Failure still open" : ""}</span>
+          </button>
+        ))}
+      </section>
     </>
   );
 }
@@ -443,7 +472,7 @@ function UrlList(props: {
   const q = query.trim().toLowerCase();
   const rows = urls.filter((u) => {
     if (filter === "Disabled" && u.enabled) return false;
-    if ((filter === "OK" || filter === "FAILING" || filter === "UNKNOWN") && u.latestStatus !== filter) return false;
+    if ((filter === "OK" || filter === "FAILING" || filter === "BLOCKED" || filter === "UNKNOWN") && u.latestStatus !== filter) return false;
     return !q || u.name.toLowerCase().includes(q) || u.url.toLowerCase().includes(q);
   });
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
@@ -454,6 +483,7 @@ function UrlList(props: {
     All: counts.total,
     OK: counts.ok,
     FAILING: counts.failing,
+    BLOCKED: counts.blocked,
     UNKNOWN: counts.unknown,
     Disabled: urls.filter((u) => !u.enabled).length,
   };
@@ -462,7 +492,7 @@ function UrlList(props: {
     <>
       <PageHead
         title="Monitored URLs"
-        subtitle="No screenshots are stored. Alerts are sent once per failure episode."
+        subtitle="No screenshots are stored. Alerts are sent once per failure episode; website blocks are never alerted."
         canEdit={props.canEdit}
         onAdd={props.onAdd}
         onImport={props.onImport}
@@ -491,10 +521,17 @@ function UrlList(props: {
                   <span className="n">{u.name}</span>
                   <span className="u">{u.url}</span>
                 </div>
-                <span className={`pill ${u.latestStatus.toLowerCase()}`}>{u.latestStatus}</span>
-                <span className="mono small" style={{ color: u.latestFailureCategory ? "var(--bad)" : "var(--muted)" }}>
-                  {u.latestFailureCategory ?? "—"}
-                </span>
+                <div className="status-cell">
+                  <StatusPill status={u.latestStatus} />
+                  {u.latestStatus === "BLOCKED" && u.failureStartedAt ? <span className="status-note">Failure open</span> : null}
+                </div>
+                {u.latestStatus === "BLOCKED" ? (
+                  <span className="small" style={{ color: "var(--warn)" }}>{formatWebsiteBlock(u.latestBlockType, u.latestBlockProvider)}</span>
+                ) : (
+                  <span className="mono small" style={{ color: u.latestFailureCategory ? "var(--bad)" : "var(--muted)" }}>
+                    {u.latestFailureCategory ?? "—"}
+                  </span>
+                )}
                 <span className="mono">{u.latestHttpStatus ?? "—"}</span>
                 <span className="mono">{formatDuration(u.latestDurationMs)}</span>
                 <span className="muted">{formatDate(u.latestCheckedAt)}</span>
@@ -552,6 +589,8 @@ function DeleteForm({ id, compact }: { id: number; compact?: boolean }) {
 
 function Detail({ url, canEdit, cadenceMinutes, onBack }: { url: UrlRow; canEdit: boolean; cadenceMinutes: number; onBack: () => void }) {
   const signals = url.latestSignals ?? [];
+  const blockEvidence = url.latestBlockEvidence ?? [];
+  const isBlocked = url.latestStatus === "BLOCKED";
   const facts = [
     { k: "HTTP status", v: url.latestHttpStatus ?? "—" },
     { k: "Duration", v: formatDuration(url.latestDurationMs) },
@@ -569,9 +608,15 @@ function Detail({ url, canEdit, cadenceMinutes, onBack }: { url: UrlRow; canEdit
           <button className="btn xs" style={{ alignSelf: "flex-start" }} onClick={onBack}>← Back</button>
           <div className="detail-title">
             <h1 style={{ margin: 0 }}>{url.name}</h1>
-            <span className={`pill ${url.latestStatus.toLowerCase()}`}>{url.latestStatus}</span>
+            <StatusPill status={url.latestStatus} />
             {!url.enabled ? <span className="pill">Disabled</span> : null}
           </div>
+          {isBlocked && url.failureStartedAt ? (
+            <span className="status-note" style={{ fontSize: 12 }}>
+              Failure unresolved since {formatDate(url.failureStartedAt)} ({url.failureEpisodeCategory ?? "FAILING"},{" "}
+              {url.alertSentAt ? `alerted ${formatDate(url.alertSentAt)}` : "no alert sent"})
+            </span>
+          ) : null}
           <a className="mono small" href={url.url} target="_blank" rel="noreferrer">{url.url}</a>
         </div>
         {canEdit ? (
@@ -603,6 +648,20 @@ function Detail({ url, canEdit, cadenceMinutes, onBack }: { url: UrlRow; canEdit
                 </div>
               ) : null}
             </div>
+            {isBlocked ? (
+              <div className="summary" style={{ borderTop: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+                  <span className="muted small">Website block</span>
+                  <span style={{ color: "var(--warn)", fontWeight: 500 }}>{formatWebsiteBlock(url.latestBlockType, url.latestBlockProvider)}</span>
+                </div>
+                {blockEvidence.length ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+                    <span className="muted small">Evidence</span>
+                    <div className="signals">{blockEvidence.map((e) => <span key={e}>{e}</span>)}</div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="facts">
               {facts.map((f) => (
                 <div key={f.k}><span>{f.k}</span><span>{f.v}</span></div>
@@ -631,8 +690,14 @@ function Detail({ url, canEdit, cadenceMinutes, onBack }: { url: UrlRow; canEdit
           <section className="panel flush">
             <div className="panel-head"><strong>Failure episode</strong></div>
             <div className="kv"><span>Started</span><span>{url.failureStartedAt ? formatDate(url.failureStartedAt) : "—"}</span></div>
+            <div className="kv"><span>Category</span><span>{url.failureStartedAt ? url.failureEpisodeCategory ?? "—" : "—"}</span></div>
             <div className="kv"><span>Alert sent</span><span>{url.alertSentAt ? formatDate(url.alertSentAt) : "—"}</span></div>
             <div className="kv"><span>Recovered</span><span>{url.recoveredAt ? formatDate(url.recoveredAt) : "—"}</span></div>
+          </section>
+          <section className="panel flush">
+            <div className="panel-head"><strong>Block episode</strong><span className="muted small">Never alerted</span></div>
+            <div className="kv"><span>Started</span><span>{url.blockStartedAt ? formatDate(url.blockStartedAt) : "—"}</span></div>
+            <div className="kv"><span>Duration</span><span suppressHydrationWarning>{url.blockStartedAt ? formatAge(url.blockStartedAt) : "—"}</span></div>
           </section>
           <section className="panel flush">
             <div className="panel-head"><strong>Schedule</strong></div>
@@ -648,7 +713,15 @@ function Detail({ url, canEdit, cadenceMinutes, onBack }: { url: UrlRow; canEdit
   );
 }
 
-function Metric({ label, value, sub, tone, onClick }: { label: string; value: string | number; sub?: string; tone?: "ok" | "bad"; onClick?: () => void }) {
+function StatusPill({ status }: { status: UrlRow["latestStatus"] }) {
+  return <span className={`pill ${status.toLowerCase()}`}>{statusLabel(status)}</span>;
+}
+
+function statusLabel(status: UrlRow["latestStatus"]) {
+  return status === "BLOCKED" ? "Blocked by Website" : status;
+}
+
+function Metric({ label, value, sub, tone, onClick }: { label: string; value: string | number; sub?: string; tone?: "ok" | "bad" | "warn"; onClick?: () => void }) {
   const inner = (
     <>
       <div className="k"><i />{label}</div>
@@ -671,4 +744,14 @@ function formatTime(value: Date | string) {
 function formatDate(value: Date | string | null) {
   if (!value) return "Never checked";
   return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function formatAge(value: Date | string | null) {
+  if (!value) return "—";
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return days < 14 ? `${days}d` : `${Math.floor(days / 7)}w`;
 }

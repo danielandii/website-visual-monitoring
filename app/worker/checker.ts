@@ -3,6 +3,8 @@ import type { Browser, BrowserContext, ConsoleMessage, Page, Response } from "pl
 import type { AppConfig } from "~/lib/config.server";
 import type { CheckOutcome } from "./types";
 import type { OpenRouterVisualClassifier } from "./ai";
+import { detectWebsiteBlock } from "./website-block";
+import { formatWebsiteBlock } from "~/lib/website-block";
 
 const BLOCKED_HOST_PATTERNS = [
   "google-analytics.com",
@@ -27,7 +29,6 @@ const MAX_CONSOLE_MESSAGES = 100;
 const MAX_CAPTURED_BROWSER_ERRORS = 5;
 
 const ERROR_TEXT_RE = /\b(404 not found|500 internal server error|502 bad gateway|503 service unavailable|service unavailable|maintenance mode|temporarily unavailable|application error|server error)\b/i;
-const BLOCKED_TEXT_RE = /\b(access denied|forbidden|captcha|checking your browser|verify you are human|cloudflare|security check|blocked)\b/i;
 
 export async function checkUrl(browser: Browser, url: string, config: AppConfig, ai: OpenRouterVisualClassifier) {
   return withTimeout(runCheck(browser, url, config, ai), config.TOTAL_CHECK_TIMEOUT_MS, () => ({
@@ -128,6 +129,7 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
     await delay(config.STABILIZATION_DELAY_MS);
 
     const httpStatus = response?.status() ?? null;
+    const headers = (await response?.allHeaders().catch(() => ({}))) ?? {};
     const finalUrl = page.url();
     const title = await page.title().catch(() => "");
     const visible = await page.evaluate(() => {
@@ -142,9 +144,16 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
         }
       }
       const text = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
+      const hasCaptchaWidget = Boolean(
+        document.querySelector(
+          'iframe[src*="recaptcha"], iframe[src*="hcaptcha.com"], iframe[src*="challenges.cloudflare.com"], iframe[src*="captcha-delivery.com"], .g-recaptcha, .h-captcha, .cf-turnstile',
+        ),
+      );
       return {
         textLength: text.length,
         sample: text.slice(0, 300),
+        blockTextSample: text.slice(0, 2000),
+        hasCaptchaWidget,
         visibleElementCount,
       };
     });
@@ -160,6 +169,29 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
       blockedMonitorInterference,
       consoleFlooded,
     });
+
+    const block = detectWebsiteBlock({
+      httpStatus,
+      headers,
+      pageText: `${title}\n${visible.blockTextSample}`,
+      textLength: visible.textLength,
+      hasCaptchaWidget: visible.hasCaptchaWidget,
+    });
+    if (block) {
+      return {
+        status: "BLOCKED",
+        failureCategory: null,
+        block,
+        summary: `Blocked by Website: ${formatWebsiteBlock(block.type, block.provider)}.`,
+        signals: [...signals, "website_block"],
+        httpStatus,
+        finalUrl,
+        durationMs: Date.now() - started,
+        pageTitle: title,
+        visibleTextSample: visible.sample,
+      };
+    }
+
     const deterministic = classifyDeterministic({ httpStatus, visibleText: visible.sample, textLength: visible.textLength, visibleElementCount: visible.visibleElementCount, screenshotBytes: screenshot.length, signals });
 
     if (deterministic.status === "FAILING") {
@@ -233,7 +265,6 @@ function buildSignals(input: {
   if (input.blockedMonitorInterference) signals.push("blocked_monitor_interference");
   if (input.consoleFlooded) signals.push("console_flood");
   if (ERROR_TEXT_RE.test(input.visible.sample)) signals.push("visible_error_text");
-  if (BLOCKED_TEXT_RE.test(input.visible.sample)) signals.push("blocked_text");
   return [...new Set(signals)];
 }
 
@@ -245,10 +276,6 @@ function classifyDeterministic(input: {
   screenshotBytes: number;
   signals: string[];
 }): Pick<CheckOutcome, "status" | "failureCategory" | "summary"> {
-  if (input.signals.includes("blocked_text") || input.httpStatus === 403) {
-    return { status: "FAILING", failureCategory: "BLOCKED", summary: "The monitor was blocked from verifying the page." };
-  }
-
   if (input.httpStatus && input.httpStatus >= 500) {
     return { status: "FAILING", failureCategory: "DOWN", summary: `Server returned HTTP ${input.httpStatus}.` };
   }

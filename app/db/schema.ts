@@ -12,17 +12,18 @@ import {
   varchar,
 } from "drizzle-orm/mysql-core";
 
-export const latestStatusValues = ["UNKNOWN", "OK", "FAILING"] as const;
+export const latestStatusValues = ["UNKNOWN", "OK", "FAILING", "BLOCKED"] as const;
 export const failureCategoryValues = [
   "DOWN",
   "BLANK",
   "ERROR_PAGE",
   "VISUAL_BROKEN",
-  "BLOCKED",
 ] as const;
+export const blockTypeValues = ["CAPTCHA", "BOT_CHALLENGE", "ACCESS_DENIED", "RATE_LIMITED"] as const;
 
 export type LatestStatus = (typeof latestStatusValues)[number];
 export type FailureCategory = (typeof failureCategoryValues)[number];
+export type BlockType = (typeof blockTypeValues)[number];
 
 export const monitoredUrls = mysqlTable(
   "monitored_urls",
@@ -48,10 +49,15 @@ export const monitoredUrls = mysqlTable(
     latestCheckedAt: timestamp("latest_checked_at"),
     latestAiClassification: varchar("latest_ai_classification", { length: 64 }),
     latestAiConfidence: int("latest_ai_confidence"),
+    latestBlockType: mysqlEnum("latest_block_type", blockTypeValues),
+    latestBlockProvider: varchar("latest_block_provider", { length: 64 }),
+    latestBlockEvidence: json("latest_block_evidence").$type<string[]>(),
 
     failureStartedAt: timestamp("failure_started_at"),
+    failureEpisodeCategory: mysqlEnum("failure_episode_category", failureCategoryValues),
     alertSentAt: timestamp("alert_sent_at"),
     recoveredAt: timestamp("recovered_at"),
+    blockStartedAt: timestamp("block_started_at"),
 
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
