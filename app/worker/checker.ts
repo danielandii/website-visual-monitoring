@@ -1,9 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Browser, BrowserContext, ConsoleMessage, Page, Response } from "playwright";
 import type { AppConfig } from "~/lib/config.server";
-import type { CheckOutcome } from "./types";
+import type { CheckOutcome, CompromiseCheck } from "./types";
 import type { OpenRouterVisualClassifier } from "./ai";
 import { detectWebsiteBlock } from "./website-block";
+import { assessCompromise, type PageObservation } from "./compromise";
 import { formatWebsiteBlock } from "~/lib/website-block";
 
 const BLOCKED_HOST_PATTERNS = [
@@ -30,8 +31,14 @@ const MAX_CAPTURED_BROWSER_ERRORS = 5;
 
 const ERROR_TEXT_RE = /\b(404 not found|500 internal server error|502 bad gateway|503 service unavailable|service unavailable|maintenance mode|temporarily unavailable|application error|server error)\b/i;
 
-export async function checkUrl(browser: Browser, url: string, config: AppConfig, ai: OpenRouterVisualClassifier) {
-  return withTimeout(runCheck(browser, url, config, ai), config.TOTAL_CHECK_TIMEOUT_MS, () => ({
+export async function checkUrl(
+  browser: Browser,
+  url: string,
+  config: AppConfig,
+  ai: OpenRouterVisualClassifier,
+  knownScriptSources: string[] | null,
+) {
+  return withTimeout(runCheck(browser, url, config, ai, knownScriptSources), config.TOTAL_CHECK_TIMEOUT_MS, () => ({
     status: "UNKNOWN" as const,
     failureCategory: null,
     summary: "The monitor exceeded the total timeout before it could verify the page.",
@@ -42,13 +49,20 @@ export async function checkUrl(browser: Browser, url: string, config: AppConfig,
   } satisfies CheckOutcome));
 }
 
-async function runCheck(browser: Browser, url: string, config: AppConfig, ai: OpenRouterVisualClassifier): Promise<CheckOutcome> {
+async function runCheck(
+  browser: Browser,
+  url: string,
+  config: AppConfig,
+  ai: OpenRouterVisualClassifier,
+  knownScriptSources: string[] | null,
+): Promise<CheckOutcome> {
   const started = Date.now();
   let context: BrowserContext | null = null;
   let page: Page | null = null;
   const failedFirstPartyAssets: string[] = [];
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
+  const scriptHosts = new Set<string>();
   let blockedMonitorInterference = false;
   let consoleMessageCount = 0;
   let consoleFlooded = false;
@@ -84,6 +98,14 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
     page.on("console", onConsole);
     page.on("pageerror", (error) => {
       if (pageErrors.length < MAX_CAPTURED_BROWSER_ERRORS) pageErrors.push(error.message.slice(0, 180));
+    });
+    page.on("request", (req) => {
+      if (req.resourceType() !== "script") return;
+      try {
+        scriptHosts.add(new URL(req.url()).hostname);
+      } catch {
+        // Ignore data: and other non-URL script sources.
+      }
     });
     page.on("response", (res) => {
       const req = res.request();
@@ -192,10 +214,33 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
       };
     }
 
+    // Error responses show the server's error page, not the client's content, so there is nothing to examine.
+    let compromise: CompromiseCheck | null = null;
+    if (config.COMPROMISE_DETECTION_ENABLED && (httpStatus === null || httpStatus < 400)) {
+      const observation = await collectPageObservation(page).catch((error) => {
+        console.warn(`Could not examine ${url} for a Compromise`, error);
+        return null;
+      });
+      if (observation) {
+        compromise = assessCompromise({
+          inputUrl: url,
+          finalUrl,
+          observation: { ...observation, title },
+          scriptHosts: [...scriptHosts],
+          knownScriptSources,
+          keywords: {
+            spam: config.COMPROMISE_SPAM_KEYWORDS,
+            gambling: config.COMPROMISE_GAMBLING_KEYWORDS,
+            defacement: config.COMPROMISE_DEFACEMENT_KEYWORDS,
+          },
+        });
+      }
+    }
+
     const deterministic = classifyDeterministic({ httpStatus, visibleText: visible.sample, textLength: visible.textLength, visibleElementCount: visible.visibleElementCount, screenshotBytes: screenshot.length, signals });
 
     if (deterministic.status === "FAILING") {
-      return { ...deterministic, signals, httpStatus, finalUrl, durationMs: Date.now() - started, screenshot, pageTitle: title, visibleTextSample: visible.sample };
+      return { ...deterministic, compromise, signals, httpStatus, finalUrl, durationMs: Date.now() - started, screenshot, pageTitle: title, visibleTextSample: visible.sample };
     }
 
     const needsAi = ai.isEnabled() && isAmbiguousVisualSuspicion(signals);
@@ -213,6 +258,7 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
         return {
           status: "FAILING",
           failureCategory: aiResult.classification,
+          compromise,
           summary: aiResult.reason,
           signals: [...signals, "ai_confirmed"],
           httpStatus,
@@ -230,6 +276,7 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
     return {
       status: "OK",
       failureCategory: null,
+      compromise,
       summary: signals.length ? `Loaded with non-alerting signals: ${signals.join(", ")}.` : "Page loaded successfully.",
       signals,
       httpStatus,
@@ -244,6 +291,90 @@ async function runCheck(browser: Browser, url: string, config: AppConfig, ai: Op
     await context?.close().catch(() => undefined);
   }
 }
+
+async function collectPageObservation(page: Page) {
+  return (await page.evaluate(PAGE_OBSERVATION_SCRIPT)) as Omit<PageObservation, "title">;
+}
+
+// Runs in the page. Kept as plain JS in a string because tsx/esbuild's keepNames helpers
+// (__name) do not exist in the browser and would break a serialized function with inner helpers.
+// Hidden subtrees are collected whole and not descended into.
+const PAGE_OBSERVATION_SCRIPT = String.raw`(() => {
+  const MAX_TEXT = 50000;
+  const MAX_ELEMENTS = 15000;
+  const MAX_LINKS = 500;
+  const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "SVG"]);
+  const hiddenParts = [];
+  let hiddenLength = 0;
+  const links = [];
+  const frames = [];
+  const squash = (text) => (text || "").replace(/\s+/g, " ").trim();
+
+  const pushHidden = (text) => {
+    const clean = squash(text);
+    if (!clean || hiddenLength >= MAX_TEXT) return;
+    hiddenParts.push(clean.slice(0, MAX_TEXT - hiddenLength));
+    hiddenLength += clean.length;
+  };
+  const pushLink = (anchor, hidden) => {
+    if (links.length < MAX_LINKS && anchor.href) links.push({ href: anchor.href, text: squash(anchor.textContent).slice(0, 200), hidden });
+  };
+  // Classic spam-hiding tricks: display/visibility, far off-screen positioning, and 1px clipped boxes.
+  const isHidden = (element) => {
+    const style = window.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden") return true;
+    const rect = element.getBoundingClientRect();
+    if (rect.right < -1000 || rect.bottom < -1000) return true;
+    return rect.width <= 1 && rect.height <= 1 && style.overflow === "hidden" && squash(element.textContent).length > 0;
+  };
+  const isHiddenFrame = (frame) => {
+    if (isHidden(frame)) return true;
+    const rect = frame.getBoundingClientRect();
+    return rect.width <= 2 || rect.height <= 2 || window.getComputedStyle(frame).opacity === "0";
+  };
+
+  for (const meta of document.querySelectorAll('meta[name="description"], meta[name="keywords"], meta[property="og:title"], meta[property="og:description"]')) {
+    pushHidden(meta.getAttribute("content"));
+  }
+
+  let visited = 0;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
+    acceptNode(element) {
+      if (++visited > MAX_ELEMENTS) return NodeFilter.FILTER_REJECT;
+      const tag = element.tagName.toUpperCase();
+      if (SKIP_TAGS.has(tag)) return NodeFilter.FILTER_REJECT;
+      if (tag === "IFRAME") {
+        frames.push({ src: element.src, hidden: isHiddenFrame(element) });
+        return NodeFilter.FILTER_REJECT;
+      }
+      if (isHidden(element)) {
+        pushHidden(element.textContent);
+        for (const anchor of element.querySelectorAll("a[href]")) pushLink(anchor, true);
+        for (const frame of element.querySelectorAll("iframe")) frames.push({ src: frame.src, hidden: true });
+        if (tag === "A") pushLink(element, true);
+        return NodeFilter.FILTER_REJECT;
+      }
+      if (tag === "A") pushLink(element, false);
+      // Text shrunk to nothing (font-size 0/1px) stays in the page for crawlers only.
+      if (parseFloat(window.getComputedStyle(element).fontSize) < 2) {
+        for (const child of element.childNodes) if (child.nodeType === Node.TEXT_NODE) pushHidden(child.textContent);
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  while (walker.nextNode()) {
+    // acceptNode does the work.
+  }
+
+  const visibleText = squash(document.body ? document.body.innerText : "");
+  return {
+    visibleText: visibleText.slice(0, MAX_TEXT),
+    visibleTextLength: visibleText.length,
+    hiddenText: hiddenParts.join(" \n "),
+    links,
+    frames,
+  };
+})()`;
 
 function buildSignals(input: {
   httpStatus: number | null;

@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { z } from "zod";
+import { DEFAULT_DEFACEMENT_KEYWORDS, DEFAULT_GAMBLING_KEYWORDS, DEFAULT_SPAM_KEYWORDS } from "./compromise";
 
 export const ConfigSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -20,6 +21,10 @@ export const ConfigSchema = z.object({
   VIEWPORT_WIDTH: z.coerce.number().int().positive().default(390),
   VIEWPORT_HEIGHT: z.coerce.number().int().positive().default(844),
   DISCORD_ALERTS_PER_MINUTE: z.coerce.number().int().positive().default(5),
+  COMPROMISE_DETECTION_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
+  COMPROMISE_SPAM_KEYWORDS: z.string().default(DEFAULT_SPAM_KEYWORDS.join("\n")),
+  COMPROMISE_GAMBLING_KEYWORDS: z.string().default(DEFAULT_GAMBLING_KEYWORDS.join("\n")),
+  COMPROMISE_DEFACEMENT_KEYWORDS: z.string().default(DEFAULT_DEFACEMENT_KEYWORDS.join("\n")),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;

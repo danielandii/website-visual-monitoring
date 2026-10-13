@@ -5,15 +5,18 @@ import { requireAdmin, requireUser } from "~/lib/auth.server";
 import { getEffectiveConfig } from "~/lib/settings.server";
 import { Topbar } from "~/components/topbar";
 import {
+  approveKnownScriptSource,
   createMonitoredUrl,
   deleteMonitoredUrl,
   importMonitoredUrlsCsv,
   listMonitoredUrls,
+  markCompromiseCleaned,
   setMonitoredUrlEnabled,
   updateMonitoredUrl,
 } from "~/db/monitored-urls.server";
 import { hostnameForDisplay } from "~/lib/url";
 import { formatWebsiteBlock } from "~/lib/website-block";
+import { COMPROMISE_KIND_LABELS, COMPROMISE_RESULT_LABELS, compromiseStatus } from "~/lib/compromise";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Website Visual Monitoring" }];
@@ -67,6 +70,16 @@ export async function action({ request }: Route.ActionArgs) {
       return { ok: true, message: "Monitored URL deleted." };
     }
 
+    if (intent === "mark-cleaned") {
+      await markCompromiseCleaned(Number(formData.get("id")));
+      return { ok: true, message: "Compromise Episode closed. The URL will be re-checked shortly." };
+    }
+
+    if (intent === "approve-source") {
+      await approveKnownScriptSource(Number(formData.get("id")), String(formData.get("source") ?? ""));
+      return { ok: true, message: "Script source approved for this URL." };
+    }
+
     if (intent === "import") {
       const file = formData.get("csv");
       const csv = file instanceof File ? await file.text() : String(formData.get("csvText") ?? "");
@@ -83,7 +96,7 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-type Filter = "All" | "OK" | "FAILING" | "BLOCKED" | "UNKNOWN" | "Disabled";
+type Filter = "All" | "OK" | "FAILING" | "BLOCKED" | "UNKNOWN" | "HACKED" | "SUSPICIOUS" | "Disabled";
 type View = "overview" | "urls" | "detail";
 
 const PAGE_SIZE = 20;
@@ -94,6 +107,8 @@ const FILTERS: Array<{ key: Filter; label: string }> = [
   { key: "FAILING", label: "Failing" },
   { key: "BLOCKED", label: "Blocked" },
   { key: "UNKNOWN", label: "Unknown" },
+  { key: "HACKED", label: "Hacked" },
+  { key: "SUSPICIOUS", label: "Suspicious" },
   { key: "Disabled", label: "Disabled" },
 ];
 
@@ -124,6 +139,8 @@ export default function Dashboard() {
   const failing = count("FAILING");
   const blocked = count("BLOCKED");
   const unknown = count("UNKNOWN");
+  const hacked = urls.filter((u) => compromiseStatus(u) === "HACKED").length;
+  const suspicious = urls.filter((u) => compromiseStatus(u) === "SUSPICIOUS").length;
   const total = urls.length;
   const selected = urls.find((u) => u.id === selectedId) ?? null;
   const activeView: View = view === "detail" && !selected ? "urls" : view;
@@ -158,7 +175,7 @@ export default function Dashboard() {
           <Overview
             urls={urls}
             canEdit={canEdit}
-            counts={{ total, ok, failing, blocked, unknown }}
+            counts={{ total, ok, failing, blocked, unknown, hacked, suspicious }}
             cadenceMinutes={cadenceMinutes}
             maxConcurrent={maxConcurrent}
             navigationTimeoutMs={navigationTimeoutMs}
@@ -177,7 +194,7 @@ export default function Dashboard() {
             filter={filter}
             query={query}
             page={page}
-            counts={{ total, ok, failing, blocked, unknown }}
+            counts={{ total, ok, failing, blocked, unknown, hacked, suspicious }}
             onFilter={setFilter}
             onQuery={changeQuery}
             onPage={setPage}
@@ -241,7 +258,7 @@ export default function Dashboard() {
 }
 
 type UrlRow = ReturnType<typeof useLoaderData<typeof loader>>["urls"][number];
-type Counts = { total: number; ok: number; failing: number; blocked: number; unknown: number };
+type Counts = { total: number; ok: number; failing: number; blocked: number; unknown: number; hacked: number; suspicious: number };
 
 function PageHead({ title, subtitle, canEdit, onAdd, onImport }: { title: string; subtitle: string; canEdit: boolean; onAdd: () => void; onImport: () => void }) {
   return (
@@ -295,6 +312,10 @@ function Overview(props: {
     .filter((u) => u.latestStatus === "BLOCKED")
     .sort((a, b) => new Date(a.blockStartedAt ?? 0).getTime() - new Date(b.blockStartedAt ?? 0).getTime());
 
+  const hackedUrls = urls
+    .filter((u) => u.compromiseStartedAt)
+    .sort((a, b) => new Date(a.compromiseStartedAt ?? 0).getTime() - new Date(b.compromiseStartedAt ?? 0).getTime());
+
   const timed = urls.filter((u) => u.latestDurationMs != null).slice(0, 14);
   const queue = urls
     .filter((u) => u.enabled)
@@ -312,12 +333,36 @@ function Overview(props: {
         onImport={props.onImport}
       />
 
+      {hackedUrls.length ? (
+        <section className="panel flush" style={{ borderColor: "var(--bad)" }}>
+          <div className="panel-head">
+            <strong style={{ color: "var(--bad)" }}>Hacked websites</strong>
+            <span className="muted small">Malicious content found · stays Hacked until an Admin marks it cleaned</span>
+          </div>
+          {hackedUrls.map((u) => (
+            <button key={u.id} className="list-row" onClick={() => props.onOpen(u.id)}>
+              <span style={{ fontWeight: 500 }}>{u.name}</span>
+              <span className="tag">{u.compromiseEvidence?.[0] ? COMPROMISE_KIND_LABELS[u.compromiseEvidence[0].kind] : "Hacked"}</span>
+              <span className="muted small">Since {formatDate(u.compromiseStartedAt)}</span>
+              <span className="muted small" suppressHydrationWarning>Last seen {formatAge(u.compromiseLastSeenAt)} ago</span>
+            </button>
+          ))}
+        </section>
+      ) : null}
+
       <section className="metrics" aria-label="Monitoring summary">
         <Metric label="Monitored URLs" value={counts.total} sub={`${disabled} disabled`} onClick={() => props.onFilter("All")} />
         <Metric label="OK" value={counts.ok} tone="ok" sub={`${pct(counts.ok)}% of total`} onClick={() => props.onFilter("OK")} />
         <Metric label="Failing" value={counts.failing} tone="bad" sub={`${pct(counts.failing)}% of total`} onClick={() => props.onFilter("FAILING")} />
         <Metric label="Blocked" value={counts.blocked} tone="warn" sub="Blocked by website · not alerted" onClick={() => props.onFilter("BLOCKED")} />
         <Metric label="Unknown" value={counts.unknown} sub="Not checked yet" onClick={() => props.onFilter("UNKNOWN")} />
+        <Metric
+          label="Hacked"
+          value={counts.hacked}
+          tone={counts.hacked ? "bad" : undefined}
+          sub={`${counts.suspicious} suspicious`}
+          onClick={() => props.onFilter(counts.hacked || !counts.suspicious ? "HACKED" : "SUSPICIOUS")}
+        />
         <Metric label="Cadence" value={`${cadenceMinutes}m`} sub="Per URL" />
       </section>
 
@@ -473,6 +518,7 @@ function UrlList(props: {
   const rows = urls.filter((u) => {
     if (filter === "Disabled" && u.enabled) return false;
     if ((filter === "OK" || filter === "FAILING" || filter === "BLOCKED" || filter === "UNKNOWN") && u.latestStatus !== filter) return false;
+    if ((filter === "HACKED" || filter === "SUSPICIOUS") && compromiseStatus(u) !== filter) return false;
     return !q || u.name.toLowerCase().includes(q) || u.url.toLowerCase().includes(q);
   });
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
@@ -485,6 +531,8 @@ function UrlList(props: {
     FAILING: counts.failing,
     BLOCKED: counts.blocked,
     UNKNOWN: counts.unknown,
+    HACKED: counts.hacked,
+    SUSPICIOUS: counts.suspicious,
     Disabled: urls.filter((u) => !u.enabled).length,
   };
 
@@ -492,7 +540,7 @@ function UrlList(props: {
     <>
       <PageHead
         title="Monitored URLs"
-        subtitle="No screenshots are stored. Alerts are sent once per failure episode; website blocks are never alerted."
+        subtitle="No screenshots are stored. Alerts are sent once per failure or Compromise Episode; website blocks are never alerted."
         canEdit={props.canEdit}
         onAdd={props.onAdd}
         onImport={props.onImport}
@@ -513,7 +561,7 @@ function UrlList(props: {
         <div className="table-scroll">
           <div className="table">
             <div className="tr th url-grid">
-              <span>Name / URL</span><span>Status</span><span>Category</span><span>HTTP</span><span>Duration</span><span>Last checked</span><span>Enabled</span><span />
+              <span>Name / URL</span><span>Status</span><span>Security</span><span>Category</span><span>HTTP</span><span>Duration</span><span>Last checked</span><span>Enabled</span><span />
             </div>
             {pageRows.map((u) => (
               <div key={u.id} className={`tr row url-grid ${u.enabled ? "" : "off"}`} onClick={() => props.onOpen(u.id)}>
@@ -525,6 +573,7 @@ function UrlList(props: {
                   <StatusPill status={u.latestStatus} />
                   {u.latestStatus === "BLOCKED" && u.failureStartedAt ? <span className="status-note">Failure open</span> : null}
                 </div>
+                <CompromisePill url={u} />
                 {u.latestStatus === "BLOCKED" ? (
                   <span className="small" style={{ color: "var(--warn)" }}>{formatWebsiteBlock(u.latestBlockType, u.latestBlockProvider)}</span>
                 ) : (
@@ -591,6 +640,9 @@ function Detail({ url, canEdit, cadenceMinutes, onBack }: { url: UrlRow; canEdit
   const signals = url.latestSignals ?? [];
   const blockEvidence = url.latestBlockEvidence ?? [];
   const isBlocked = url.latestStatus === "BLOCKED";
+  const findings = url.latestCompromiseFindings ?? [];
+  const evidence = url.compromiseEvidence ?? [];
+  const security = compromiseStatus(url);
   const facts = [
     { k: "HTTP status", v: url.latestHttpStatus ?? "—" },
     { k: "Duration", v: formatDuration(url.latestDurationMs) },
@@ -609,6 +661,7 @@ function Detail({ url, canEdit, cadenceMinutes, onBack }: { url: UrlRow; canEdit
           <div className="detail-title">
             <h1 style={{ margin: 0 }}>{url.name}</h1>
             <StatusPill status={url.latestStatus} />
+            <CompromisePill url={url} />
             {!url.enabled ? <span className="pill">Disabled</span> : null}
           </div>
           {isBlocked && url.failureStartedAt ? (
@@ -662,6 +715,26 @@ function Detail({ url, canEdit, cadenceMinutes, onBack }: { url: UrlRow; canEdit
                 ) : null}
               </div>
             ) : null}
+            {findings.length ? (
+              <div className="summary" style={{ borderTop: "1px solid var(--line)" }}>
+                <span className="muted small">Compromise findings</span>
+                {findings.map((f) => (
+                  <div key={`${f.kind}:${f.detail}`} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
+                    <span className={`pill ${f.level.toLowerCase()}`}>{COMPROMISE_RESULT_LABELS[f.level]}</span>
+                    <span style={{ fontWeight: 500 }}>{COMPROMISE_KIND_LABELS[f.kind]}</span>
+                    <span className="mono small" style={{ wordBreak: "break-all" }}>{f.detail}</span>
+                    {canEdit && f.level === "SUSPICIOUS" && f.source ? (
+                      <Form method="post" style={{ marginLeft: "auto" }}>
+                        <input type="hidden" name="intent" value="approve-source" />
+                        <input type="hidden" name="id" value={url.id} />
+                        <input type="hidden" name="source" value={f.source} />
+                        <button className="btn xs" type="submit" title={`Trust ${f.source} for this URL`}>Approve {f.source}</button>
+                      </Form>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div className="facts">
               {facts.map((f) => (
                 <div key={f.k}><span>{f.k}</span><span>{f.v}</span></div>
@@ -687,6 +760,35 @@ function Detail({ url, canEdit, cadenceMinutes, onBack }: { url: UrlRow; canEdit
         </div>
 
         <div className="stack">
+          <section className="panel flush" style={url.compromiseStartedAt ? { borderColor: "var(--bad)" } : undefined}>
+            <div className="panel-head"><strong>Compromise episode</strong><CompromisePill url={url} /></div>
+            <div className="kv"><span>Started</span><span>{url.compromiseStartedAt ? formatDate(url.compromiseStartedAt) : "—"}</span></div>
+            <div className="kv"><span>Last seen</span><span>{url.compromiseLastSeenAt ? formatDate(url.compromiseLastSeenAt) : "—"}</span></div>
+            <div className="kv"><span>Alert sent</span><span>{url.compromiseAlertSentAt ? formatDate(url.compromiseAlertSentAt) : "—"}</span></div>
+            <div className="kv"><span>Known script sources</span><span>{url.knownScriptSources ? url.knownScriptSources.length : "Learning"}</span></div>
+            {evidence.length ? (
+              <div className="summary" style={{ borderTop: "1px solid var(--line)" }}>
+                <span className="muted small">Evidence when first seen</span>
+                <div className="signals">{evidence.map((f) => <span key={`${f.kind}:${f.detail}`}>{COMPROMISE_KIND_LABELS[f.kind]}: {f.detail}</span>)}</div>
+              </div>
+            ) : null}
+            {canEdit && url.compromiseStartedAt ? (
+              <Form
+                method="post"
+                className="summary"
+                style={{ borderTop: "1px solid var(--line)" }}
+                onSubmit={(e) => !confirm("Confirm the malicious content was removed from this site?") && e.preventDefault()}
+              >
+                <input type="hidden" name="intent" value="mark-cleaned" />
+                <input type="hidden" name="id" value={url.id} />
+                <span className="muted small">Close the episode once the site is cleaned. If malicious content is seen again, a new episode opens and a new alert is sent.</span>
+                <button className="btn primary" type="submit" style={{ alignSelf: "flex-start" }}>Mark as cleaned</button>
+              </Form>
+            ) : null}
+            {security === "NOT_CHECKED" && !url.compromiseStartedAt ? (
+              <p className="muted small" style={{ margin: 0, padding: "8px 16px" }}>The page could not be examined on the latest check, or compromise detection is off.</p>
+            ) : null}
+          </section>
           <section className="panel flush">
             <div className="panel-head"><strong>Failure episode</strong></div>
             <div className="kv"><span>Started</span><span>{url.failureStartedAt ? formatDate(url.failureStartedAt) : "—"}</span></div>
@@ -715,6 +817,11 @@ function Detail({ url, canEdit, cadenceMinutes, onBack }: { url: UrlRow; canEdit
 
 function StatusPill({ status }: { status: UrlRow["latestStatus"] }) {
   return <span className={`pill ${status.toLowerCase()}`}>{statusLabel(status)}</span>;
+}
+
+function CompromisePill({ url }: { url: UrlRow }) {
+  const status = compromiseStatus(url);
+  return <span className={`pill ${status === "NOT_CHECKED" ? "" : status.toLowerCase()}`}>{COMPROMISE_RESULT_LABELS[status]}</span>;
 }
 
 function statusLabel(status: UrlRow["latestStatus"]) {

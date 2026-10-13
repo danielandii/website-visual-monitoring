@@ -148,16 +148,27 @@ export default function Settings() {
                         <span className="mono muted small">{field.env}</span>
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                        <div className="input-unit">
-                          <input
-                            name={field.env}
-                            type={field.secret ? "password" : "text"}
-                            defaultValue={current.value}
-                            placeholder={field.secret ? (current.isSet ? "•••••••• (set — leave blank to keep)" : field.placeholder) : undefined}
-                            autoComplete="off"
-                          />
-                          {field.unit ? <span>{field.unit}</span> : null}
-                        </div>
+                        {field.input === "toggle" ? (
+                          <div className="input-unit">
+                            <select name={field.env} defaultValue={current.value || "true"}>
+                              <option value="true">On</option>
+                              <option value="false">Off</option>
+                            </select>
+                          </div>
+                        ) : field.input === "list" ? (
+                          <textarea name={field.env} defaultValue={current.value} rows={6} spellCheck={false} className="mono" />
+                        ) : (
+                          <div className="input-unit">
+                            <input
+                              name={field.env}
+                              type={field.secret ? "password" : "text"}
+                              defaultValue={current.value}
+                              placeholder={field.secret ? (current.isSet ? "•••••••• (set — leave blank to keep)" : field.placeholder) : undefined}
+                              autoComplete="off"
+                            />
+                            {field.unit ? <span>{field.unit}</span> : null}
+                          </div>
+                        )}
                         {field.secret && current.isSet ? (
                           <label className="check-row muted small"><input type="checkbox" name={`clear:${field.env}`} /> Remove saved value</label>
                         ) : null}
@@ -235,7 +246,7 @@ export default function Settings() {
           {key === "danger" ? (
             <section className="panel flush" style={{ borderColor: "var(--bad)" }}>
               <SectionHead title="Danger zone" desc="These actions cannot be undone." danger />
-              <DangerRow intent="reset-results" title="Reset latest results" help="Set every URL back to UNKNOWN and clear open failure episodes." button="Reset results" confirmText="Reset the latest results for every URL?" />
+              <DangerRow intent="reset-results" title="Reset latest results" help="Set every URL back to UNKNOWN and clear open failure and Compromise Episodes." button="Reset results" confirmText="Reset the latest results for every URL?" />
               <DangerRow intent="delete-all" title="Delete all monitored URLs" help="Removes every URL and its latest check result." button="Delete all" confirmText="Delete ALL monitored URLs?" />
             </section>
           ) : null}

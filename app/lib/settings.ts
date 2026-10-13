@@ -5,6 +5,8 @@ export type SettingField = {
   unit?: string;
   secret?: boolean;
   placeholder?: string;
+  /** Rendered as an On/Off select or a one-per-line textarea instead of a text input. */
+  input?: "toggle" | "list";
 };
 
 export type SettingSection = {
@@ -67,6 +69,18 @@ export const SETTING_SECTIONS: SettingSection[] = [
     fields: [
       { env: "OPENROUTER_API_KEY", label: "API key", help: "Leave empty to disable AI review.", secret: true, placeholder: "sk-or-…" },
       { env: "OPENROUTER_MODEL", label: "Model", help: "Vision-capable model used for review." },
+    ],
+  },
+  {
+    key: "compromise",
+    label: "Compromise detection",
+    title: "Compromise detection",
+    desc: "Looks for planted gambling spam, defacement, hostile redirects, and unknown scripts during each check. Hacked URLs are alerted once per Compromise Episode.",
+    fields: [
+      { env: "COMPROMISE_DETECTION_ENABLED", label: "Compromise detection", help: "Turn off to stop checking for Compromises. Open episodes stay open.", input: "toggle" },
+      { env: "COMPROMISE_SPAM_KEYWORDS", label: "Spam keywords", help: "Terms only gambling spam uses. Found anywhere on the page, they mark the URL Hacked. One per line; clear to restore defaults.", input: "list" },
+      { env: "COMPROMISE_GAMBLING_KEYWORDS", label: "Gambling keywords", help: "General gambling terms. They mark the URL Hacked only in a hidden link to another site. One per line; clear to restore defaults.", input: "list" },
+      { env: "COMPROMISE_DEFACEMENT_KEYWORDS", label: "Defacement keywords", help: "Found in the page title or on a short page, they mark the URL Hacked. One per line; clear to restore defaults.", input: "list" },
     ],
   },
 ];

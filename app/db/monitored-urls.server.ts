@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, getPool, isTransientDatabaseError, resetPool, withDbRetry } from "./client.server";
-import { monitoredUrls, type BlockType, type FailureCategory, type LatestStatus, type MonitoredUrl } from "./schema";
+import { monitoredUrls, type BlockType, type CompromiseFinding, type FailureCategory, type LatestStatus, type MonitoredUrl } from "./schema";
+import { resultOf } from "~/lib/compromise";
 import { normalizeUrl } from "~/lib/url";
 import { hashNormalizedUrl } from "~/lib/url.server";
 
@@ -37,6 +38,12 @@ export async function resetLatestResults() {
         alertSentAt: null,
         recoveredAt: null,
         blockStartedAt: null,
+        latestCompromiseResult: "NOT_CHECKED",
+        latestCompromiseFindings: null,
+        compromiseStartedAt: null,
+        compromiseLastSeenAt: null,
+        compromiseEvidence: null,
+        compromiseAlertSentAt: null,
         nextCheckAt: new Date(),
       }),
     { label: "reset latest results" },
@@ -75,6 +82,8 @@ export async function updateMonitoredUrl(input: { id: number; name: string; url:
           normalizedUrl,
           normalizedUrlHash,
           enabled: input.enabled,
+          // A different page loads different scripts, so its Known Script Sources are learned again.
+          knownScriptSources: sql`CASE WHEN ${monitoredUrls.normalizedUrlHash} = ${normalizedUrlHash} THEN ${monitoredUrls.knownScriptSources} ELSE NULL END`,
         })
         .where(eq(monitoredUrls.id, input.id));
     },
@@ -211,6 +220,8 @@ export async function updateCheckOutcome(input: {
   checkedAt: Date;
   nextCheckAt: Date;
   alertSentAt?: Date | null;
+  compromise: { result: "CLEAN" | "SUSPICIOUS" | "HACKED"; findings: CompromiseFinding[]; thirdPartySources: string[] } | null;
+  compromiseAlertSentAt?: Date | null;
 }) {
   const isOk = input.status === "OK";
   const isFailing = input.status === "FAILING";
@@ -218,6 +229,11 @@ export async function updateCheckOutcome(input: {
   const prev = input.previous;
   // Only OK or a confirmed Failure ends a Block Episode; only OK ends a Failure Episode.
   // BLOCKED and UNKNOWN leave the Failure Episode untouched, so they never count as a Recovery.
+  const compromise = input.compromise;
+  const hacked = compromise?.result === "HACKED";
+  // Compromise Episode columns are only written while Hacked, and with COALESCE, so an Admin
+  // marking the URL cleaned or approving a source mid-check is never overwritten by stale values.
+  const evidence = JSON.stringify(compromise?.findings.filter((f) => f.level === "HACKED") ?? []);
 
   await withDbRetry(
     async () => {
@@ -242,6 +258,15 @@ export async function updateCheckOutcome(input: {
           alertSentAt: isOk ? null : isFailing ? input.alertSentAt ?? prev.alertSentAt : prev.alertSentAt,
           recoveredAt: isOk && prev.failureStartedAt ? input.checkedAt : prev.recoveredAt,
           blockStartedAt: isOk || isFailing ? null : isBlocked ? prev.blockStartedAt ?? input.checkedAt : prev.blockStartedAt,
+          latestCompromiseResult: compromise?.result ?? "NOT_CHECKED",
+          latestCompromiseFindings: compromise?.findings ?? null,
+          knownScriptSources: compromise
+            ? sql`COALESCE(${monitoredUrls.knownScriptSources}, CAST(${JSON.stringify(compromise.thirdPartySources)} AS JSON))`
+            : undefined,
+          compromiseStartedAt: hacked ? sql`COALESCE(${monitoredUrls.compromiseStartedAt}, ${input.checkedAt})` : undefined,
+          compromiseLastSeenAt: hacked ? input.checkedAt : undefined,
+          compromiseEvidence: hacked ? sql`COALESCE(${monitoredUrls.compromiseEvidence}, CAST(${evidence} AS JSON))` : undefined,
+          compromiseAlertSentAt: hacked && input.compromiseAlertSentAt ? input.compromiseAlertSentAt : undefined,
           nextCheckAt: input.nextCheckAt,
           checkClaimedAt: null,
           checkClaimedBy: null,
@@ -250,6 +275,47 @@ export async function updateCheckOutcome(input: {
     },
     { label: `update check outcome for monitored url ${input.id}` },
   );
+}
+
+/** An Admin confirms the site was cleaned: ends the Compromise Episode and re-checks right away. */
+export async function markCompromiseCleaned(id: number) {
+  await withDbRetry(async () => {
+    await getDb()
+      .update(monitoredUrls)
+      .set({
+        compromiseStartedAt: null,
+        compromiseLastSeenAt: null,
+        compromiseEvidence: null,
+        compromiseAlertSentAt: null,
+        latestCompromiseResult: "NOT_CHECKED",
+        latestCompromiseFindings: null,
+        nextCheckAt: new Date(),
+      })
+      .where(eq(monitoredUrls.id, id));
+  }, { label: `mark monitored url ${id} cleaned` });
+}
+
+/** An Admin approves a script or frame site, so it no longer raises a Compromise Suspicion. */
+export async function approveKnownScriptSource(id: number, source: string) {
+  const site = source.trim().toLowerCase();
+  if (!/^[a-z0-9.-]+$/.test(site)) throw new Error("Invalid script source.");
+
+  await withDbRetry(async () => {
+    const [row] = await getDb().select().from(monitoredUrls).where(eq(monitoredUrls.id, id)).limit(1);
+    if (!row) throw new Error("Monitored URL not found.");
+    const known = [...new Set([...(row.knownScriptSources ?? []), site])].sort();
+    // Drop the approved source's suspicions from the latest result now instead of waiting for the next check.
+    const findings = (row.latestCompromiseFindings ?? []).filter((f) => f.level === "HACKED" || f.source !== site);
+    const examined = row.latestCompromiseResult !== "NOT_CHECKED";
+    await getDb()
+      .update(monitoredUrls)
+      .set({
+        knownScriptSources: known,
+        latestCompromiseFindings: examined ? findings : row.latestCompromiseFindings,
+        latestCompromiseResult: examined ? resultOf(findings) : row.latestCompromiseResult,
+      })
+      .where(eq(monitoredUrls.id, id));
+  }, { label: `approve script source for monitored url ${id}` });
 }
 
 function makeClaimOwner(workerId: string) {

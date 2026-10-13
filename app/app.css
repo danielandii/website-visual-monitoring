@@ -67,7 +67,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: inherit;
 }
@@ -752,6 +753,10 @@ button.list-row:hover {
 .pill.ok { background: var(--ok-bg); color: var(--ok); }
 .pill.failing { background: var(--bad-bg); color: var(--bad); }
 .pill.blocked { background: var(--warn-bg); color: var(--warn); }
+.pill.clean { background: var(--ok-bg); color: var(--ok); }
+.pill.suspicious { background: var(--warn-bg); color: var(--warn); }
+/* Solid red so a Hacked URL stands out from an ordinary failure. */
+.pill.hacked { background: var(--bad); color: #fff; }
 
 .status-cell {
   display: flex;
@@ -839,12 +844,12 @@ button.list-row:hover {
 
 .table {
   width: 100%;
-  min-width: 1040px;
+  min-width: 1150px;
 }
 
 .tr {
   display: grid;
-  grid-template-columns: minmax(240px, 2.4fr) 88px minmax(96px, 1fr) 64px 84px 184px 72px 72px;
+  grid-template-columns: minmax(240px, 2.4fr) 88px 92px minmax(96px, 1fr) 64px 84px 184px 72px 72px;
   column-gap: 16px;
   align-items: center;
   padding: 8px 16px;
@@ -860,17 +865,17 @@ button.list-row:hover {
   letter-spacing: 0.05em;
 }
 
-.url-grid > :nth-child(3),
-.url-grid > :nth-child(6) {
+.url-grid > :nth-child(4),
+.url-grid > :nth-child(7) {
   white-space: nowrap;
 }
 
-.url-grid > :nth-child(4),
-.url-grid > :nth-child(5) {
+.url-grid > :nth-child(5),
+.url-grid > :nth-child(6) {
   text-align: right;
 }
 
-.url-grid > :nth-child(7) {
+.url-grid > :nth-child(8) {
   display: flex;
   justify-content: center;
 }
@@ -1281,6 +1286,31 @@ dialog.modal::backdrop {
   font-family: var(--font-mono);
   font-size: 12px;
   outline: none;
+}
+
+.input-unit select {
+  flex: 1;
+  height: 100%;
+  border: 0;
+  padding: 0 10px;
+  background: transparent;
+  outline: none;
+}
+
+.setting-row textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+.setting-row textarea:focus {
+  outline: 2px solid rgb(255 107 53 / 40%);
 }
 
 .input-unit:focus-within {

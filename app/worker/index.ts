@@ -10,6 +10,7 @@ import type { MonitoredUrl } from "~/db/schema";
 import { OpenRouterVisualClassifier } from "./ai";
 import { checkUrl } from "./checker";
 import { DiscordAlertDispatcher } from "./discord";
+import { mergeCompromiseChecks } from "./compromise";
 
 chromium.use(stealth());
 
@@ -89,13 +90,13 @@ async function processUrl(
   discord: DiscordAlertDispatcher,
   browser: Browser,
 ) {
-  const first = await checkUrl(browser, monitoredUrl.url, config, ai);
+  const first = await checkUrl(browser, monitoredUrl.url, config, ai, monitoredUrl.knownScriptSources);
   let final = first;
 
   if (first.status !== "OK") {
     await delay(config.CONFIRMATION_RETRY_DELAY_MS);
-    const retry = await checkUrl(browser, monitoredUrl.url, config, ai);
-    final = combineConfirmationAttempts(first, retry);
+    const retry = await checkUrl(browser, monitoredUrl.url, config, ai, monitoredUrl.knownScriptSources);
+    final = { ...combineConfirmationAttempts(first, retry), compromise: mergeCompromiseChecks(first.compromise, retry.compromise) };
   }
 
   const checkedAt = new Date();
@@ -105,6 +106,14 @@ async function processUrl(
   if (final.status === "FAILING" && !monitoredUrl.alertSentAt) {
     const sent = await discord.sendFailureAlert(monitoredUrl, final);
     alertSentAt = sent ? checkedAt : null;
+  }
+
+  // Compromise Evidence needs no Confirmation Retry; it alerts once per Compromise Episode.
+  const compromise = final.compromise ?? null;
+  let compromiseAlertSentAt: Date | null = null;
+  if (compromise?.result === "HACKED" && !monitoredUrl.compromiseAlertSentAt) {
+    const sent = await discord.sendCompromiseAlert(monitoredUrl, compromise);
+    compromiseAlertSentAt = sent ? checkedAt : null;
   }
 
   await updateCheckOutcome({
@@ -123,10 +132,13 @@ async function processUrl(
     checkedAt,
     nextCheckAt,
     alertSentAt,
+    compromise,
+    compromiseAlertSentAt,
   });
 
   const detail = final.failureCategory ?? final.block?.type;
-  console.log(`${monitoredUrl.url} -> ${final.status}${detail ? `/${detail}` : ""}`);
+  const security = compromise && compromise.result !== "CLEAN" ? ` [${compromise.result}]` : "";
+  console.log(`${monitoredUrl.url} -> ${final.status}${detail ? `/${detail}` : ""}${security}`);
 }
 
 function combineConfirmationAttempts(first: Awaited<ReturnType<typeof checkUrl>>, retry: Awaited<ReturnType<typeof checkUrl>>) {

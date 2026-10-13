@@ -20,10 +20,23 @@ export const failureCategoryValues = [
   "VISUAL_BROKEN",
 ] as const;
 export const blockTypeValues = ["CAPTCHA", "BOT_CHALLENGE", "ACCESS_DENIED", "RATE_LIMITED"] as const;
+export const compromiseResultValues = ["NOT_CHECKED", "CLEAN", "SUSPICIOUS", "HACKED"] as const;
+export const compromiseKindValues = ["GAMBLING_SPAM", "DEFACEMENT", "REDIRECT", "FOREIGN_SCRIPT", "HIDDEN_IFRAME"] as const;
 
 export type LatestStatus = (typeof latestStatusValues)[number];
 export type FailureCategory = (typeof failureCategoryValues)[number];
 export type BlockType = (typeof blockTypeValues)[number];
+export type CompromiseResult = (typeof compromiseResultValues)[number];
+export type CompromiseKind = (typeof compromiseKindValues)[number];
+
+/** One observation from a check: Compromise Evidence (HACKED) or a Compromise Suspicion (SUSPICIOUS). */
+export type CompromiseFinding = {
+  kind: CompromiseKind;
+  level: "HACKED" | "SUSPICIOUS";
+  detail: string;
+  /** Site of the script or frame, so an Admin can approve it as a Known Script Source. */
+  source?: string;
+};
 
 export const monitoredUrls = mysqlTable(
   "monitored_urls",
@@ -52,12 +65,19 @@ export const monitoredUrls = mysqlTable(
     latestBlockType: mysqlEnum("latest_block_type", blockTypeValues),
     latestBlockProvider: varchar("latest_block_provider", { length: 64 }),
     latestBlockEvidence: json("latest_block_evidence").$type<string[]>(),
+    latestCompromiseResult: mysqlEnum("latest_compromise_result", compromiseResultValues).notNull().default("NOT_CHECKED"),
+    latestCompromiseFindings: json("latest_compromise_findings").$type<CompromiseFinding[]>(),
+    knownScriptSources: json("known_script_sources").$type<string[]>(),
 
     failureStartedAt: timestamp("failure_started_at"),
     failureEpisodeCategory: mysqlEnum("failure_episode_category", failureCategoryValues),
     alertSentAt: timestamp("alert_sent_at"),
     recoveredAt: timestamp("recovered_at"),
     blockStartedAt: timestamp("block_started_at"),
+    compromiseStartedAt: timestamp("compromise_started_at"),
+    compromiseLastSeenAt: timestamp("compromise_last_seen_at"),
+    compromiseEvidence: json("compromise_evidence").$type<CompromiseFinding[]>(),
+    compromiseAlertSentAt: timestamp("compromise_alert_sent_at"),
 
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),

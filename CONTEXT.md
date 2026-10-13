@@ -40,6 +40,30 @@ _Avoid_: WAF, CDN, firewall
 A period during which a **Monitored URL** remains in a confirmed **Failure** state.
 _Avoid_: Incident, outage event
 
+**Compromise**:
+Malicious content planted on a **Monitored URL** by a third party, such as gambling spam, defacement, or a hostile redirect, proven by **Compromise Evidence** seen from the outside as a normal visitor would see it. A **Compromise** is independent of **Failure** and **Website Block**: a **Monitored URL** can load fine and still be compromised. Shown to users as *Hacked*.
+_Avoid_: Malware, infection, vulnerability, XSS
+
+**Compromise Evidence**:
+An observation strong enough on its own to confirm a **Compromise**, such as defacement text, gambling spam hidden in the page or its outbound links, or a redirect to a gambling site. One sighting is enough; it needs no **Confirmation Retry**.
+_Avoid_: Malware signature, IOC
+
+**Compromise Suspicion**:
+An observation that may indicate a **Compromise** but has innocent explanations, such as a script from an unfamiliar domain, a hidden frame, or a redirect to an unrelated domain. It is shown only on the dashboard, never opens a **Compromise Episode**, never produces an **Alert**, and clears on the next check without it.
+_Avoid_: Suspicion Signal (that term is about **Failures**), warning
+
+**Compromise Status**:
+The security state of a **Monitored URL**, kept separate from its availability state: Clean, Suspicious, Hacked, or Not checked when the page could not be examined.
+_Avoid_: Security status, malware status
+
+**Compromise Episode**:
+A period during which a **Monitored URL** is treated as compromised, opened by **Compromise Evidence** and ended only when an Admin marks it cleaned. Later clean checks never end it on their own. It may overlap a **Failure Episode** or **Block Episode** and neither starts nor ends them.
+_Avoid_: Security incident, infection
+
+**Known Script Source**:
+A domain from which a **Monitored URL** is expected to load scripts or hidden frames, either learned from its first examined check, approved by an Admin, or commonly trusted for every **Monitored URL**. Scripts or hidden frames from any other domain are a **Compromise Suspicion**.
+_Avoid_: Whitelist, allowlist, baseline
+
 **Recovery**:
 A later successful check that ends a **Failure Episode** and allows a future **Alert** if the **Monitored URL** fails again. A **Website Block** is never a **Recovery**.
 _Avoid_: Recovery alert, resolved notification
@@ -61,7 +85,7 @@ A second check of the same **Monitored URL** used to confirm a suspected **Failu
 _Avoid_: Double check, rerun
 
 **Alert**:
-A notification sent once when a **Failure** is confirmed.
+A notification sent once when a **Failure** or a **Compromise** is confirmed, at most once per episode.
 _Avoid_: Message, ping, repeated alert
 
 **Alert Rate Limit**:
