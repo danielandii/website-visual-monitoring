@@ -92,6 +92,10 @@ _Avoid_: Message, ping, repeated alert
 A cap on how many **Alerts** may be sent in a short period to prevent Discord flooding.
 _Avoid_: Spam control, throttle
 
+**Alert Role**:
+The Discord role tagged on every **Alert**, so a human is paged when a **Failure** or a **Compromise** is confirmed.
+_Avoid_: Mention, ping role, on-call group, Discord role
+
 **Ephemeral Screenshot**:
 A temporary image captured during a check and discarded before the check completes.
 _Avoid_: Stored screenshot, archive image

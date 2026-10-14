@@ -9,6 +9,10 @@ export const ConfigSchema = z.object({
   ADMIN_PASSWORD_HASH: z.string().optional(),
   ADMIN_PASSWORD: z.string().optional(),
   DISCORD_WEBHOOK_URL: z.string().url().optional(),
+  DISCORD_ALERT_ROLE_ID: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim().replace(/^<@&(\d+)>$/, "$1") : v),
+    z.string().regex(/^\d{17,20}$/, "Must be a Discord role ID (17–20 digit snowflake).").optional(),
+  ),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_MODEL: z.string().default("google/gemma-4-26b-a4b-it"),
   CHECK_CADENCE_MINUTES: z.coerce.number().int().positive().default(60),

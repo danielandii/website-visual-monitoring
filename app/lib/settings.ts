@@ -58,6 +58,7 @@ export const SETTING_SECTIONS: SettingSection[] = [
     desc: "One Alert is sent per Failure Episode. Recoveries are not announced.",
     fields: [
       { env: "DISCORD_WEBHOOK_URL", label: "Webhook URL", help: "Discord channel webhook that receives alerts.", secret: true, placeholder: "https://discord.com/api/webhooks/…" },
+      { env: "DISCORD_ALERT_ROLE_ID", label: "Alert role ID", help: "Discord role tagged on every alert. In Discord: Server Settings → Roles → right-click role → Copy Role ID (Developer Mode must be on). Leave blank to disable.", placeholder: "e.g. 1234567890123456789" },
       { env: "DISCORD_ALERTS_PER_MINUTE", label: "Alert rate limit", help: "Maximum alerts sent per minute to prevent flooding.", unit: "/min" },
     ],
   },

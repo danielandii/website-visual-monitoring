@@ -5,6 +5,7 @@ import { getEffectiveConfig, saveSettings, sectionKeys } from "~/lib/settings.se
 import { SETTING_SECTIONS } from "~/lib/settings";
 import { changeOwnPassword, findUserById, updateProfile } from "~/db/users.server";
 import { deleteAllMonitoredUrls, resetLatestResults } from "~/db/monitored-urls.server";
+import { buildWebhookPayload } from "~/lib/discord-payload";
 import { Topbar } from "~/components/topbar";
 
 export function meta({}: Route.MetaArgs) {
@@ -57,12 +58,13 @@ export async function action({ request }: Route.ActionArgs) {
     }
 
     if (intent === "test-webhook") {
-      const url = (await getEffectiveConfig()).DISCORD_WEBHOOK_URL;
-      if (!url) throw new Error("No Discord webhook URL is configured.");
-      const response = await fetch(url, {
+      const config = await getEffectiveConfig();
+      if (!config.DISCORD_WEBHOOK_URL) throw new Error("No Discord webhook URL is configured.");
+      const payload = buildWebhookPayload(`✅ Test alert from Website Visual Monitoring, sent by ${me.name}.`, config);
+      const response = await fetch(config.DISCORD_WEBHOOK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: `✅ Test alert from Website Visual Monitoring, sent by ${me.name}.` }),
+        body: JSON.stringify(payload),
       });
       if (!response.ok) throw new Error(`Discord responded with ${response.status}.`);
       return { ok: true, message: "Test alert sent." };

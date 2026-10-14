@@ -1,6 +1,7 @@
 import type { AppConfig } from "~/lib/config.server";
 import type { MonitoredUrl } from "~/db/schema";
 import { formatCompromiseFinding } from "~/lib/compromise";
+import { buildWebhookPayload, type WebhookPayload } from "~/lib/discord-payload";
 import type { CheckOutcome, CompromiseCheck } from "./types";
 
 export class DiscordAlertDispatcher {
@@ -54,16 +55,17 @@ export class DiscordAlertDispatcher {
     if (!this.consumeRateLimit()) {
       this.suppressed += 1;
       if (this.suppressed === 1) {
-        await this.post(`⚠️ Discord alert rate limit reached. Additional alerts will be summarized after the current minute.`);
+        await this.postRaw(`⚠️ Discord alert rate limit reached. Additional alerts will be summarized after the current minute.`);
       }
       return false;
     }
 
-    const ok = await this.post(content.slice(0, 2000));
+    const payload = buildWebhookPayload(content.slice(0, 2000), this.config);
+    const ok = await this.postPayload(payload);
     if (this.suppressed > 0) {
       const count = this.suppressed;
       this.suppressed = 0;
-      await this.post(`⚠️ ${count} additional monitored URL alert(s) were rate-limited. Check the dashboard for latest status.`);
+      await this.postRaw(`⚠️ ${count} additional monitored URL alert(s) were rate-limited. Check the dashboard for latest status.`);
     }
     return ok;
   }
@@ -79,19 +81,27 @@ export class DiscordAlertDispatcher {
     return true;
   }
 
-  private async post(content: string) {
-    if (!this.config.DISCORD_WEBHOOK_URL) return false;
-    const response = await fetch(this.config.DISCORD_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
-    });
-    if (!response.ok) {
-      console.warn(`Discord webhook failed: ${response.status} ${await response.text()}`);
-      return false;
-    }
-    return true;
+  private postPayload(payload: WebhookPayload) {
+    return postWebhook(this.config.DISCORD_WEBHOOK_URL, payload);
   }
+
+  private postRaw(content: string) {
+    return postWebhook(this.config.DISCORD_WEBHOOK_URL, { content, allowed_mentions: { parse: [] } });
+  }
+}
+
+async function postWebhook(url: string | undefined, payload: WebhookPayload) {
+  if (!url) return false;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    console.warn(`Discord webhook failed: ${response.status} ${await response.text()}`);
+    return false;
+  }
+  return true;
 }
 
 /** Makes URLs and hostnames unclickable (hxxps://evil[.]com) so nobody opens a malicious site by accident. */
