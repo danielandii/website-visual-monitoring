@@ -53,7 +53,7 @@ export async function runExpirySweep(
     processed += 1;
     // Space RDAP lookups to be gentle on registries.
     try {
-      await delay(500, undefined, { signal });
+      await delay(1_500, undefined, { signal });
     } catch {
       // Abort during delay — loop head will detect and return.
     }
@@ -96,17 +96,23 @@ async function sweepOneDomain(
 
   if (effective) {
     const daysToExpiry = Math.floor((effective.getTime() - now.getTime()) / MS_PER_DAY);
-    for (const threshold of EXPIRY_THRESHOLDS) {
-      if (daysToExpiry > threshold) continue;
-      if (sentThresholds.includes(threshold)) continue;
+    // Fire only the most urgent (smallest) applicable threshold. Larger thresholds
+    // whose windows have already passed are marked sent silently so they never re-fire.
+    const ascending = [...EXPIRY_THRESHOLDS].sort((a, b) => a - b);
+    const applicable = ascending.find((t) => daysToExpiry <= t);
+    if (applicable !== undefined && !sentThresholds.includes(applicable)) {
       const sent = await discord.sendExpiryAlert({
         registrableDomain: domain.registrableDomain,
         expiresAt: effective,
-        thresholdDays: threshold,
+        thresholdDays: applicable,
         source,
         affectedUrls,
       });
-      if (sent) sentThresholds.push(threshold);
+      if (sent) {
+        for (const t of EXPIRY_THRESHOLDS) {
+          if (t >= applicable && !sentThresholds.includes(t)) sentThresholds.push(t);
+        }
+      }
     }
   }
 
