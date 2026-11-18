@@ -5,7 +5,7 @@ import { getEffectiveConfig, saveSettings, sectionKeys } from "~/lib/settings.se
 import { SETTING_SECTIONS } from "~/lib/settings";
 import { changeOwnPassword, findUserById, updateProfile } from "~/db/users.server";
 import { deleteAllMonitoredUrls, resetLatestResults } from "~/db/monitored-urls.server";
-import { buildWebhookPayload } from "~/lib/discord-payload";
+import { buildExpiryWebhookPayload, buildWebhookPayload, parseExpiryMentions } from "~/lib/discord-payload";
 import { Topbar } from "~/components/topbar";
 
 export function meta({}: Route.MetaArgs) {
@@ -68,6 +68,21 @@ export async function action({ request }: Route.ActionArgs) {
       });
       if (!response.ok) throw new Error(`Discord responded with ${response.status}.`);
       return { ok: true, message: "Test alert sent." };
+    }
+
+    if (intent === "test-expiry-webhook") {
+      const config = await getEffectiveConfig();
+      if (!config.DISCORD_WEBHOOK_URL) throw new Error("No Discord webhook URL is configured.");
+      const mentions = parseExpiryMentions(config.DISCORD_EXPIRY_MENTIONS);
+      const content = `✅ **Test Domain Expiry Alert** from Website Visual Monitoring, sent by ${me.name}.\nThis is what a real expiry alert would look like, including any role/user mentions.`;
+      const payload = buildExpiryWebhookPayload(content, mentions);
+      const response = await fetch(config.DISCORD_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(`Discord responded with ${response.status}.`);
+      return { ok: true, message: `Test expiry alert sent (${mentions.length} mention(s)).` };
     }
 
     if (intent === "profile") {
@@ -179,13 +194,22 @@ export default function Settings() {
                   );
                 })}
                 {section.key === "alerts" ? (
-                  <div className="setting-row">
-                    <div className="setting-label">
-                      <span style={{ fontWeight: 500 }}>Test webhook</span>
-                      <span className="muted">Send a test message to the saved channel.</span>
+                  <>
+                    <div className="setting-row">
+                      <div className="setting-label">
+                        <span style={{ fontWeight: 500 }}>Test webhook</span>
+                        <span className="muted">Send a test message to the saved channel, tagging the Alert Role.</span>
+                      </div>
+                      <button className="btn" style={{ justifySelf: "end" }} type="submit" form="test-webhook">Send test</button>
                     </div>
-                    <button className="btn" style={{ justifySelf: "end" }} type="submit" form="test-webhook">Send test</button>
-                  </div>
+                    <div className="setting-row">
+                      <div className="setting-label">
+                        <span style={{ fontWeight: 500 }}>Test expiry mentions</span>
+                        <span className="muted">Send a sample Domain Expiry Alert, tagging DISCORD_EXPIRY_MENTIONS.</span>
+                      </div>
+                      <button className="btn" style={{ justifySelf: "end" }} type="submit" form="test-expiry-webhook">Send expiry test</button>
+                    </div>
+                  </>
                 ) : null}
                 <div className="setting-foot">
                   <button className="btn" type="submit" form="reset-section">Reset to defaults</button>
@@ -198,6 +222,9 @@ export default function Settings() {
               </Form>
               <Form method="post" id="test-webhook">
                 <input type="hidden" name="intent" value="test-webhook" />
+              </Form>
+              <Form method="post" id="test-expiry-webhook">
+                <input type="hidden" name="intent" value="test-expiry-webhook" />
               </Form>
             </section>
           ) : null}

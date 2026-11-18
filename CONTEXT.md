@@ -96,6 +96,26 @@ _Avoid_: Spam control, throttle
 The Discord role tagged on every **Alert**, so a human is paged when a **Failure** or a **Compromise** is confirmed.
 _Avoid_: Mention, ping role, on-call group, Discord role
 
+**Monitored Domain**:
+The registrable domain (eTLD+1) derived from one or more **Monitored URLs**, tracked independently for registration expiration. Existence is derived: a domain row appears when any Monitored URL references it, and disappears when the last such URL is deleted. Whether a Monitored URL is enabled does not affect the Monitored Domain.
+_Avoid_: Hostname, site, zone
+
+**Domain Expiry Alert**:
+A notification sent once when a **Monitored Domain** crosses an **Expiry Threshold**. Resets on renewal (expiration jumps forward by ≥ 60 days). Bypasses the **Alert Rate Limit** and uses **Expiry Mentions** instead of the **Alert Role**.
+_Avoid_: Renewal reminder, WHOIS alert
+
+**Expiry Threshold**:
+One of the day-counts at which a **Domain Expiry Alert** may fire: 30, 14, 7, 1, and 0 days before expiration. 0 means already expired.
+_Avoid_: Warning level
+
+**Domain Expiry Lookup**:
+The most recent attempt to read a **Monitored Domain**'s expiration via RDAP or Admin entry, including success/failure and source (`RDAP`, `MANUAL`, `UNKNOWN`). Surfaced on the Monitoring Dashboard as a warning badge when it fails, but never produces an **Alert**.
+_Avoid_: WHOIS check, registrar poll
+
+**Expiry Mention**:
+A Discord role or user ID tagged on every **Domain Expiry Alert**, configured separately from the **Alert Role**. Multiple may be configured.
+_Avoid_: Expiry role, renewal ping
+
 **Ephemeral Screenshot**:
 A temporary image captured during a check and discarded before the check completes.
 _Avoid_: Stored screenshot, archive image

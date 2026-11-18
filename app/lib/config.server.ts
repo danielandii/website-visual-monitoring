@@ -13,6 +13,16 @@ export const ConfigSchema = z.object({
     (v) => (typeof v === "string" ? v.trim().replace(/^<@&(\d+)>$/, "$1") : v),
     z.string().regex(/^\d{17,20}$/, "Must be a Discord role ID (17–20 digit snowflake).").optional(),
   ),
+  DISCORD_EXPIRY_MENTIONS: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim() : v),
+    z
+      .string()
+      .optional()
+      .refine(
+        (v) => !v || v.split(",").every((entry) => /^\s*(role|user):\d{17,20}\s*$/.test(entry)),
+        "Each mention must be 'role:ID' or 'user:ID' (17–20 digit snowflake), comma-separated.",
+      ),
+  ),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_MODEL: z.string().default("google/gemma-4-26b-a4b-it"),
   CHECK_CADENCE_MINUTES: z.coerce.number().int().positive().default(60),

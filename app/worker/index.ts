@@ -11,6 +11,9 @@ import { OpenRouterVisualClassifier } from "./ai";
 import { checkUrl } from "./checker";
 import { DiscordAlertDispatcher } from "./discord";
 import { mergeCompromiseChecks } from "./compromise";
+import { runExpirySweep } from "./expiry-sweep";
+
+const EXPIRY_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 chromium.use(stealth());
 
@@ -45,11 +48,17 @@ async function main() {
     }
   };
   let lastSettingsReload = Date.now();
+  let lastExpirySweep = 0;
 
   while (!stopping) {
     if (Date.now() - lastSettingsReload >= 30_000) {
       lastSettingsReload = Date.now();
       await reloadSettings();
+    }
+
+    if (Date.now() - lastExpirySweep >= EXPIRY_SWEEP_INTERVAL_MS) {
+      lastExpirySweep = Date.now();
+      void runExpirySweep(discord).catch((error) => console.error("Expiry sweep failed", error));
     }
 
     if (active >= config.MAX_CONCURRENT_CHECKS) {

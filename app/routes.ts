@@ -4,6 +4,7 @@ export default [
   layout("routes/app-layout.tsx", [
     index("routes/dashboard.tsx"),
     route("users", "routes/users.tsx"),
+    route("domains", "routes/domains.tsx"),
     route("settings", "routes/settings.tsx"),
   ]),
   route("login", "routes/login.tsx"),

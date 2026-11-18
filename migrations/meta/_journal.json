@@ -15,6 +15,13 @@
       "when": 1791531628169,
       "tag": "0001_compromise_detection",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1794997396933,
+      "tag": "0002_friendly_shocker",
+      "breakpoints": true
     }
   ]
 }

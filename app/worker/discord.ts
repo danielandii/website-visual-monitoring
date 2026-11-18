@@ -1,8 +1,21 @@
 import type { AppConfig } from "~/lib/config.server";
 import type { MonitoredUrl } from "~/db/schema";
 import { formatCompromiseFinding } from "~/lib/compromise";
-import { buildWebhookPayload, type WebhookPayload } from "~/lib/discord-payload";
+import {
+  buildExpiryWebhookPayload,
+  buildWebhookPayload,
+  parseExpiryMentions,
+  type WebhookPayload,
+} from "~/lib/discord-payload";
 import type { CheckOutcome, CompromiseCheck } from "./types";
+
+export type ExpiryAlertInput = {
+  registrableDomain: string;
+  expiresAt: Date;
+  thresholdDays: number;
+  source: "RDAP" | "MANUAL" | "UNKNOWN";
+  affectedUrls: Array<{ name: string; url: string }>;
+};
 
 export class DiscordAlertDispatcher {
   private sentInWindow = 0;
@@ -31,6 +44,34 @@ export class DiscordAlertDispatcher {
     }
 
     return this.sendAlert(`🚨 **Website monitor detected a confirmed failure**\n\n${fields.join("\n")}`);
+  }
+
+  /** Domain Expiry Alert. Bypasses the Alert Rate Limit and uses DISCORD_EXPIRY_MENTIONS instead of the Alert Role. */
+  async sendExpiryAlert(input: ExpiryAlertInput) {
+    if (!this.config.DISCORD_WEBHOOK_URL) {
+      console.warn("DISCORD_WEBHOOK_URL not configured; expiry alert not sent.");
+      return false;
+    }
+    const expiresIso = input.expiresAt.toISOString().slice(0, 10);
+    const header =
+      input.thresholdDays === 0
+        ? `🔴 **Domain EXPIRED: ${input.registrableDomain}**`
+        : `⚠️ **Domain expiring in ${input.thresholdDays} day${input.thresholdDays === 1 ? "" : "s"}: ${input.registrableDomain}**`;
+    const urls = input.affectedUrls.length
+      ? input.affectedUrls.map((u) => `• ${u.name} — ${u.url}`).join("\n")
+      : "• (no monitored URLs currently reference this domain)";
+    const content = [
+      header,
+      ``,
+      `Expires: ${expiresIso}`,
+      `Source: ${input.source}`,
+      `Affected Monitored URLs:`,
+      urls,
+    ].join("\n");
+
+    const mentions = parseExpiryMentions(this.config.DISCORD_EXPIRY_MENTIONS);
+    const payload = buildExpiryWebhookPayload(content.slice(0, 2000), mentions);
+    return this.postPayload(payload);
   }
 
   async sendCompromiseAlert(monitoredUrl: MonitoredUrl, compromise: CompromiseCheck) {

@@ -43,6 +43,10 @@ export default function AppLayout() {
                 <span className="dot" />
                 <span className="label">Users</span>
               </NavLink>
+              <NavLink to="/domains" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
+                <span className="dot" />
+                <span className="label">Domains</span>
+              </NavLink>
               <NavLink to="/settings" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
                 <span className="dot" />
                 <span className="label">Settings</span>

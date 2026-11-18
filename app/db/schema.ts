@@ -2,6 +2,7 @@ import {
   bigint,
   boolean,
   char,
+  date,
   int,
   json,
   mysqlEnum,
@@ -107,6 +108,34 @@ export const users = mysqlTable(
 );
 
 export type User = typeof users.$inferSelect;
+
+export const expirySourceValues = ["RDAP", "MANUAL", "UNKNOWN"] as const;
+export type ExpirySource = (typeof expirySourceValues)[number];
+
+/** Expiry Thresholds (days before expiration) at which a Domain Expiry Alert may fire. 0 = already expired. */
+export const EXPIRY_THRESHOLDS = [30, 14, 7, 1, 0] as const;
+
+export const monitoredDomains = mysqlTable(
+  "monitored_domains",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    registrableDomain: varchar("registrable_domain", { length: 253 }).notNull(),
+    expiresAt: date("expires_at", { mode: "date" }),
+    expiresAtSource: mysqlEnum("expires_at_source", expirySourceValues).notNull().default("UNKNOWN"),
+    rdapExpiresAt: date("rdap_expires_at", { mode: "date" }),
+    manualExpiresAt: date("manual_expires_at", { mode: "date" }),
+    manualExpiresAtSetAt: timestamp("manual_expires_at_set_at"),
+    lastLookupAt: timestamp("last_lookup_at"),
+    lastLookupError: text("last_lookup_error"),
+    sentThresholds: json("sent_thresholds").$type<number[]>().notNull().default([]),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => [uniqueIndex("monitored_domains_registrable_unique").on(table.registrableDomain)],
+);
+
+export type MonitoredDomain = typeof monitoredDomains.$inferSelect;
+export type NewMonitoredDomain = typeof monitoredDomains.$inferInsert;
 
 export const appSettings = mysqlTable("app_settings", {
   key: varchar("key", { length: 100 }).primaryKey(),
