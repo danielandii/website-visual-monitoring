@@ -128,6 +128,28 @@ export async function setManualExpiration(id: number, manualExpiresAt: Date | nu
   );
 }
 
+export async function deleteDomainCascade(id: number): Promise<{ deletedUrls: number; registrableDomain: string } | null> {
+  return withDbRetry(async () => {
+    const db = getDb();
+    const [domain] = await db.select().from(monitoredDomains).where(eq(monitoredDomains.id, id)).limit(1);
+    if (!domain) return null;
+
+    const urls = await db.select({ id: monitoredUrls.id, url: monitoredUrls.url }).from(monitoredUrls);
+    const urlIds = urls
+      .filter((u) => registrableDomainOf(u.url) === domain.registrableDomain)
+      .map((u) => u.id);
+
+    await db.transaction(async (tx) => {
+      if (urlIds.length) {
+        await tx.delete(monitoredUrls).where(inArray(monitoredUrls.id, urlIds));
+      }
+      await tx.delete(monitoredDomains).where(eq(monitoredDomains.id, id));
+    });
+
+    return { deletedUrls: urlIds.length, registrableDomain: domain.registrableDomain };
+  }, { label: `delete domain cascade ${id}` });
+}
+
 export async function findDomainById(id: number) {
   const [row] = await withDbRetry(
     () => getDb().select().from(monitoredDomains).where(eq(monitoredDomains.id, id)).limit(1),

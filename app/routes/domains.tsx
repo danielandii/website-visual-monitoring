@@ -2,6 +2,7 @@ import { Form, useActionData, useLoaderData, useNavigate, useNavigation } from "
 import type { Route } from "./+types/domains";
 import { requireAdmin } from "~/lib/auth.server";
 import {
+  deleteDomainCascade,
   findDomainById,
   listMonitoredDomainsWithUrls,
   setManualExpiration,
@@ -42,6 +43,13 @@ export async function action({ request }: Route.ActionArgs) {
       if (!domain) throw new Error("Domain not found.");
       await setManualExpiration(id, null);
       return { ok: true, message: `Manual value cleared; RDAP value will be used.` };
+    }
+    if (intent === "delete-domain") {
+      const id = Number(form.get("id"));
+      const result = await deleteDomainCascade(id);
+      if (!result) throw new Error("Domain not found.");
+      const urlPart = result.deletedUrls === 1 ? "1 Monitored URL" : `${result.deletedUrls} Monitored URLs`;
+      return { ok: true, message: `Deleted ${result.registrableDomain} and ${urlPart}.` };
     }
     if (intent === "refresh") {
       const config = await getEffectiveConfig();
@@ -86,7 +94,7 @@ function countdownColor(d: Date | null): string | undefined {
   return undefined;
 }
 
-const GRID = "minmax(180px, 1.6fr) minmax(170px, 1.2fr) 70px 60px minmax(200px, 1fr) 70px";
+const GRID = "minmax(180px, 1.6fr) minmax(170px, 1.2fr) 70px 60px minmax(200px, 1fr) 70px 70px";
 
 export default function Domains() {
   const { domains } = useLoaderData<typeof loader>();
@@ -142,6 +150,7 @@ export default function Domains() {
                   <span>URLs</span>
                   <span>Manual override</span>
                   <span>Sent</span>
+                  <span></span>
                 </div>
                 {domains.map((d) => {
                   const rdapDisagrees =
@@ -209,6 +218,23 @@ export default function Domains() {
                       <span className="mono small" title="Thresholds already sent this registration period">
                         {d.sentThresholds.length ? d.sentThresholds.join(",") : "—"}
                       </span>
+
+                      <Form
+                        method="post"
+                        onSubmit={(e) => {
+                          const urlCount = d.urls.length;
+                          const urlPart = urlCount === 0
+                            ? "no Monitored URLs"
+                            : `${urlCount} Monitored URL${urlCount === 1 ? "" : "s"} (${d.urls.map((u) => u.name).join(", ")})`;
+                          if (!confirm(`Delete domain ${d.registrableDomain} and ${urlPart}? This cannot be undone.`)) {
+                            e.preventDefault();
+                          }
+                        }}
+                      >
+                        <input type="hidden" name="intent" value="delete-domain" />
+                        <input type="hidden" name="id" value={d.id} />
+                        <button className="btn xs" type="submit">Delete</button>
+                      </Form>
                     </div>
                   );
                 })}
