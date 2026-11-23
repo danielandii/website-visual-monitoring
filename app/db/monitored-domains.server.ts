@@ -150,6 +150,13 @@ export async function deleteDomainCascade(id: number): Promise<{ deletedUrls: nu
   }, { label: `delete domain cascade ${id}` });
 }
 
+export async function setHandledBy(id: number, handledBy: string | null) {
+  await withDbRetry(
+    () => getDb().update(monitoredDomains).set({ handledBy }).where(eq(monitoredDomains.id, id)),
+    { label: `set handled by for domain ${id}` },
+  );
+}
+
 export async function findDomainById(id: number) {
   const [row] = await withDbRetry(
     () => getDb().select().from(monitoredDomains).where(eq(monitoredDomains.id, id)).limit(1),

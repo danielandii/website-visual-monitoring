@@ -128,6 +128,7 @@ export const monitoredDomains = mysqlTable(
     lastLookupAt: timestamp("last_lookup_at"),
     lastLookupError: text("last_lookup_error"),
     sentThresholds: json("sent_thresholds").$type<number[]>().notNull().default([]),
+    handledBy: varchar("handled_by", { length: 191 }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
   },

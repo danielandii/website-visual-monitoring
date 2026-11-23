@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { Form, useActionData, useLoaderData, useNavigate, useNavigation } from "react-router";
 import type { Route } from "./+types/domains";
 import { requireAdmin } from "~/lib/auth.server";
@@ -5,6 +6,7 @@ import {
   deleteDomainCascade,
   findDomainById,
   listMonitoredDomainsWithUrls,
+  setHandledBy,
   setManualExpiration,
   syncMonitoredDomainsFromUrls,
 } from "~/db/monitored-domains.server";
@@ -43,6 +45,12 @@ export async function action({ request }: Route.ActionArgs) {
       if (!domain) throw new Error("Domain not found.");
       await setManualExpiration(id, null);
       return { ok: true, message: `Manual value cleared; RDAP value will be used.` };
+    }
+    if (intent === "set-handled-by") {
+      const id = Number(form.get("id"));
+      const raw = String(form.get("handledBy") ?? "").trim();
+      await setHandledBy(id, raw ? raw : null);
+      return { ok: true, message: "Handled By updated." };
     }
     if (intent === "delete-domain") {
       const id = Number(form.get("id"));
@@ -94,7 +102,21 @@ function countdownColor(d: Date | null): string | undefined {
   return undefined;
 }
 
-const GRID = "minmax(180px, 1.6fr) minmax(170px, 1.2fr) 70px 60px minmax(200px, 1fr) 70px 70px";
+const GRID = "minmax(180px, 1.6fr) minmax(170px, 1.2fr) 70px 60px minmax(180px, 1fr) minmax(200px, 1fr) 70px 70px";
+
+type DomainRow = ReturnType<typeof useLoaderData<typeof loader>>["domains"][number];
+type ExpiryFilter = "all" | "expired" | "lte7" | "lte30" | "unknown";
+
+function matchesExpiryFilter(d: DomainRow, filter: ExpiryFilter): boolean {
+  if (filter === "all") return true;
+  const days = daysUntil(d.expiresAt);
+  if (filter === "unknown") return days === null;
+  if (days === null) return false;
+  if (filter === "expired") return days < 0;
+  if (filter === "lte7") return days >= 0 && days <= 7;
+  if (filter === "lte30") return days >= 0 && days <= 30;
+  return true;
+}
 
 export default function Domains() {
   const { domains } = useLoaderData<typeof loader>();
@@ -103,6 +125,20 @@ export default function Domains() {
   const navigate = useNavigate();
   const refreshing =
     navigation.state !== "idle" && navigation.formData?.get("intent") === "refresh";
+
+  const [query, setQuery] = useState("");
+  const [expiryFilter, setExpiryFilter] = useState<ExpiryFilter>("all");
+
+  const filteredDomains = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return domains.filter((d) => {
+      if (q) {
+        const hay = `${d.registrableDomain} ${d.handledBy ?? ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return matchesExpiryFilter(d, expiryFilter);
+    });
+  }, [domains, query, expiryFilter]);
 
   return (
     <>
@@ -140,6 +176,34 @@ export default function Domains() {
         {domains.length === 0 ? (
           <p className="muted">No monitored domains yet. Add a Monitored URL first.</p>
         ) : (
+          <>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "8px 0 12px" }}>
+            <input
+              type="search"
+              placeholder="Search domain or Handled By…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="inline-input"
+              style={{ flex: "1 1 280px", maxWidth: 360 }}
+            />
+            <select
+              value={expiryFilter}
+              onChange={(e) => setExpiryFilter(e.target.value as ExpiryFilter)}
+              className="inline-input"
+            >
+              <option value="all">All expiry</option>
+              <option value="expired">Expired</option>
+              <option value="lte7">Expiring ≤ 7d</option>
+              <option value="lte30">Expiring ≤ 30d</option>
+              <option value="unknown">Unknown</option>
+            </select>
+            <span className="muted small">
+              {filteredDomains.length} of {domains.length}
+            </span>
+          </div>
+          </>
+        )}
+        {domains.length === 0 ? null : (
           <section className="panel flush">
             <div className="table-scroll">
               <div className="table" style={{ minWidth: 900 }}>
@@ -148,11 +212,15 @@ export default function Domains() {
                   <span>Expires</span>
                   <span>Source</span>
                   <span>URLs</span>
+                  <span>Handled By</span>
                   <span>Manual override</span>
                   <span>Sent</span>
                   <span></span>
                 </div>
-                {domains.map((d) => {
+                {filteredDomains.length === 0 ? (
+                  <div className="tr"><span className="muted" style={{ padding: "8px 2px" }}>No domains match the current filters.</span></div>
+                ) : null}
+                {filteredDomains.map((d) => {
                   const rdapDisagrees =
                     d.manualExpiresAt && d.rdapExpiresAt && d.manualExpiresAt.getTime() !== d.rdapExpiresAt.getTime();
                   const urlsTitle = d.urls.length
@@ -189,6 +257,20 @@ export default function Domains() {
                       <span className="small" title={urlsTitle} style={{ cursor: "help" }}>
                         {d.urls.length}
                       </span>
+
+                      <Form method="post" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input type="hidden" name="intent" value="set-handled-by" />
+                        <input type="hidden" name="id" value={d.id} />
+                        <input
+                          type="text"
+                          name="handledBy"
+                          defaultValue={d.handledBy ?? ""}
+                          placeholder="—"
+                          className="inline-input"
+                          style={{ minWidth: 120, flex: 1 }}
+                        />
+                        <button className="btn xs" type="submit">Save</button>
+                      </Form>
 
                       <Form method="post" style={{ display: "flex", gap: 6, alignItems: "center" }}>
                         <input type="hidden" name="intent" value="set-manual" />

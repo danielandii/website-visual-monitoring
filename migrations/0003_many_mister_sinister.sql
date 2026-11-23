@@ -1,0 +1,1 @@
+ALTER TABLE `monitored_domains` ADD `handled_by` varchar(191);
