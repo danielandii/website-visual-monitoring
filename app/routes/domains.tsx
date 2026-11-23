@@ -102,7 +102,7 @@ function countdownColor(d: Date | null): string | undefined {
   return undefined;
 }
 
-const GRID = "minmax(180px, 1.6fr) minmax(170px, 1.2fr) 70px 60px minmax(180px, 1fr) minmax(200px, 1fr) 70px 70px";
+const GRID = "minmax(180px, 1.6fr) minmax(170px, 1.2fr) 70px 60px minmax(160px, 1fr) minmax(260px, 1.1fr) 60px 70px";
 
 type DomainRow = ReturnType<typeof useLoaderData<typeof loader>>["domains"][number];
 type ExpiryFilter = "all" | "expired" | "lte7" | "lte30" | "unknown";
@@ -206,7 +206,7 @@ export default function Domains() {
         {domains.length === 0 ? null : (
           <section className="panel flush">
             <div className="table-scroll">
-              <div className="table" style={{ minWidth: 900 }}>
+              <div className="table" style={{ minWidth: 1100 }}>
                 <div className="tr th" style={{ display: "grid", gridTemplateColumns: GRID, gap: 10 }}>
                   <span>Domain</span>
                   <span>Expires</span>
@@ -290,6 +290,7 @@ export default function Domains() {
                             formAction="?"
                             name="intent"
                             value="accept-rdap"
+                            style={{ whiteSpace: "nowrap" }}
                             title={`RDAP reports ${dateFormat.format(d.rdapExpiresAt!)}. Click to clear manual override.`}
                           >
                             Use RDAP
